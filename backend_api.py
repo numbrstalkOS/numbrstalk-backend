@@ -205,5 +205,19 @@ async def diagnose_upload(file:UploadFile=File(...)):
 async def chat(request:ChatRequest):
     return {"answer":"I'm Lilly! Check the AI Insights tab for marketplace analysis, or upload a CSV for instant diagnosis."}
 
+@app.get("/api/debug/raw")
+async def debug_raw():
+    # Show first change row
+    c_sample = change_data[0] if change_data else {}
+    # Show first main row
+    m_sample = main_data[0] if main_data else {}
+    return {
+        "change_sample_keys": list(c_sample.keys()) if c_sample else [],
+        "change_sample_section": str(c_sample.get('section',''))[:100] if c_sample else "",
+        "change_sample_content": str(c_sample.get('content',''))[:200] if c_sample else "",
+        "main_sample_keys": list(m_sample.keys()) if m_sample else [],
+        "main_sample_discount": str(m_sample.get('discount','')) if m_sample else "",
+        "main_sample_discount_type": str(type(m_sample.get('discount','')).__name__) if m_sample else ""
+    }
 if __name__=="__main__":
     import uvicorn; uvicorn.run(app,host="0.0.0.0",port=8000)
