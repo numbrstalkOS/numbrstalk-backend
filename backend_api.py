@@ -1,5 +1,5 @@
 """
-Numbrstalk.com - Diagnostic Intelligence Backend API v8.2
+Numbrstalk.com - Diagnostic Intelligence Backend API v8.3
 """
 from fastapi import FastAPI, HTTPException, Query, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,7 +14,7 @@ from collections import defaultdict
 
 DATA_DIR = Path("data")
 
-app = FastAPI(title="Numbrstalk API", version="8.2.0")
+app = FastAPI(title="Numbrstalk API", version="8.3.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 main_data, change_data, insight_data = [], [], []
@@ -38,6 +38,14 @@ def refresh():
 
 refresh()
 
+def parse_discount(v):
+    """Parse discount from strings like '46% OFF', '15%', etc."""
+    try:
+        s = str(v).replace('% OFF','').replace('%','').replace('OFF','').strip()
+        return float(s)
+    except:
+        return 0
+
 def safe_float(v, default=0):
     try: return float(str(v).replace('%','').replace('₹','').replace(',','').strip())
     except: return default
@@ -52,7 +60,7 @@ def get_products():
                 "name": n,
                 "brand": str(r.get('brand','')),
                 "price": safe_float(r.get('price')),
-                "discount": safe_float(r.get('discount')),
+                "discount": parse_discount(r.get('discount','')),
                 "platform": str(r.get('platform','')),
                 "city": str(r.get('city',''))
             }
@@ -62,76 +70,78 @@ def get_top_brands(limit=5):
     bd = defaultdict(list)
     for r in main_data:
         b = str(r.get('brand','')).strip()
-        d = safe_float(r.get('discount'))
+        d = parse_discount(r.get('discount',''))
         if b and d > 0: bd[b].append(d)
     res = [{"brand":b,"avg_discount":round(sum(ds)/len(ds),1),"product_count":len(ds)} for b,ds in bd.items()]
     res.sort(key=lambda x:x['avg_discount'], reverse=True)
     return res[:limit] if res else [{"brand":"No data","avg_discount":0,"product_count":0}]
 
 def parse_changes():
-    result = {"total_changes":0,"change_types":[],"keywords":[],"locations":[],"severity":{"Critical":0,"High":0,"Medium":0},"rank_drops":[],"rank_improvements":[],"new_entries":[],"disappeared":[]}
+    """Parse change_detection.json - has columns like issue_type, severity, old_rank, new_rank"""
+    result = {
+        "total_changes": len(change_data),
+        "change_types": [],
+        "keywords": [],
+        "locations": [],
+        "severity": {"Critical":0,"High":0,"Medium":0,"Low":0},
+        "rank_drops": [],
+        "rank_improvements": [],
+        "new_entries": [],
+        "disappeared": []
+    }
+    
+    # Count by type
+    type_counts = defaultdict(int)
+    kw_counts = defaultdict(int)
+    loc_counts = defaultdict(int)
+    
     for row in change_data:
-        s = str(row.get('section','')).strip()
-        c = str(row.get('content','')).strip()
-        m = re.search(r'Total changes detected:\s*(\d+)', c)
-        if m: result['total_changes'] = max(result['total_changes'], int(m.group(1)))
-        if 'change type' in s.lower():
-            for line in c.split('\n'):
-                line = line.strip('- *•').strip()
-                if ':' in line:
-                    parts = line.rsplit(':',1)
-                    try: result['change_types'].append({"type":parts[0].strip(),"count":int(parts[1].strip())})
-                    except: pass
-        if 'keyword' in s.lower():
-            for line in c.split('\n'):
-                line = line.strip('- *•').strip()
-                if ':' in line:
-                    parts = line.rsplit(':',1)
-                    try: result['keywords'].append({"keyword":parts[0].strip(),"changes":int(parts[1].strip().replace('changes','').strip())})
-                    except: pass
-        if 'location' in s.lower():
-            for line in c.split('\n'):
-                line = line.strip('- *•').strip()
-                if ':' in line:
-                    parts = line.rsplit(':',1)
-                    try: result['locations'].append({"location":parts[0].strip(),"changes":int(parts[1].strip().replace('changes','').strip())})
-                    except: pass
-        if 'severity' in s.lower():
-            for line in c.split('\n'):
-                line = line.strip('- *•').strip()
-                if ':' in line:
-                    parts = line.rsplit(':',1)
-                    try: result['severity'][parts[0].strip()] = int(parts[1].strip())
-                    except: pass
-        if 'rank drop' in s.lower():
-            for item in re.split(r'\n(?=\d+\.)', c):
-                item = item.strip()
-                if not item: continue
-                entry = {"product":item[:120],"old_rank":"?","new_rank":"?"}
-                m = re.search(r'Rank:\s*(\S+)\s*→\s*(\S+)', item)
-                if m: entry['old_rank'], entry['new_rank'] = m.group(1), m.group(2)
-                result['rank_drops'].append(entry)
-        if 'rank improv' in s.lower():
-            for item in re.split(r'\n(?=\d+\.)', c):
-                item = item.strip()
-                if not item: continue
-                entry = {"product":item[:120],"old_rank":"?","new_rank":"?"}
-                m = re.search(r'Rank:\s*(\S+)\s*→\s*(\S+)', item)
-                if m: entry['old_rank'], entry['new_rank'] = m.group(1), m.group(2)
-                result['rank_improvements'].append(entry)
-        if 'new product' in s.lower() or 'entering' in s.lower():
-            for item in re.split(r'\n(?=\d+\.)', c):
-                item = item.strip()
-                if not item: continue
-                entry = {"product":item[:120],"new_rank":"?"}
-                m = re.search(r'Rank:\s*-\s*→\s*(\S+)', item)
-                if m: entry['new_rank'] = m.group(1)
-                result['new_entries'].append(entry)
-        if 'disappeared' in s.lower():
-            for item in re.split(r'\n(?=\d+\.)', c):
-                item = item.strip()
-                if not item: continue
-                result['disappeared'].append({"product":item[:120]})
+        issue = str(row.get('issue_type','')).strip()
+        severity = str(row.get('severity','')).strip()
+        keyword = str(row.get('keyword','')).strip()
+        location = str(row.get('location','')).strip()
+        product = str(row.get('product_name','')).strip()
+        old_rank = str(row.get('old_rank',''))
+        new_rank = str(row.get('new_rank',''))
+        
+        if issue: type_counts[issue] += 1
+        if keyword: kw_counts[keyword] += 1
+        if location: loc_counts[location] += 1
+        
+        # Severity
+        if severity in result['severity']:
+            result['severity'][severity] += 1
+        
+        # Rank drops
+        try:
+            old = int(old_rank) if old_rank.isdigit() else 0
+            new = int(new_rank) if new_rank.isdigit() else 0
+            if old > 0 and new > 0:
+                if new > old:
+                    result['rank_drops'].append({"product":product,"old_rank":old,"new_rank":new,"keyword":keyword,"location":location})
+                elif new < old:
+                    result['rank_improvements'].append({"product":product,"old_rank":old,"new_rank":new,"keyword":keyword,"location":location})
+        except:
+            pass
+        
+        # New entries (old_rank was 0 or empty)
+        if old_rank in ['0','','-'] and new_rank not in ['0','','-','?']:
+            result['new_entries'].append({"product":product,"new_rank":new_rank,"keyword":keyword,"location":location})
+        
+        # Disappeared
+        if new_rank in ['0','','-'] and old_rank not in ['0','','-','?']:
+            result['disappeared'].append({"product":product,"old_rank":old_rank,"keyword":keyword,"location":location})
+    
+    # Build change types
+    for t, c in sorted(type_counts.items(), key=lambda x:x[1], reverse=True)[:10]:
+        result['change_types'].append({"type":t,"count":c})
+    
+    for k, c in sorted(kw_counts.items(), key=lambda x:x[1], reverse=True)[:10]:
+        result['keywords'].append({"keyword":k,"changes":c})
+    
+    for l, c in sorted(loc_counts.items(), key=lambda x:x[1], reverse=True)[:10]:
+        result['locations'].append({"location":l,"changes":c})
+    
     return result
 
 def ai_insights():
@@ -151,7 +161,7 @@ def ai_insights():
 
 @app.get("/api/health")
 async def health():
-    return {"status":"ok","version":"8.2","data_rows":len(main_data),"change_rows":len(change_data)}
+    return {"status":"ok","version":"8.3","data_rows":len(main_data),"change_rows":len(change_data)}
 
 @app.get("/api/categories")
 async def categories():
@@ -203,21 +213,10 @@ async def diagnose_upload(file:UploadFile=File(...)):
 
 @app.post("/api/chat")
 async def chat(request:ChatRequest):
-    return {"answer":"I'm Lilly! Check the AI Insights tab for marketplace analysis, or upload a CSV for instant diagnosis."}
+    c = parse_changes()
+    if c['total_changes']>0:
+        return {"answer":f"Latest scan: {c['total_changes']:,} changes across {len(c['locations'])} locations. Top issue: {c['change_types'][0]['type'] if c['change_types'] else 'N/A'}. Check AI Insights tab for details."}
+    return {"answer":"I'm Lilly! No recent scan data yet. Check the AI Insights tab or upload a CSV for diagnosis."}
 
-@app.get("/api/debug/raw")
-async def debug_raw():
-    # Show first change row
-    c_sample = change_data[0] if change_data else {}
-    # Show first main row
-    m_sample = main_data[0] if main_data else {}
-    return {
-        "change_sample_keys": list(c_sample.keys()) if c_sample else [],
-        "change_sample_section": str(c_sample.get('section',''))[:100] if c_sample else "",
-        "change_sample_content": str(c_sample.get('content',''))[:200] if c_sample else "",
-        "main_sample_keys": list(m_sample.keys()) if m_sample else [],
-        "main_sample_discount": str(m_sample.get('discount','')) if m_sample else "",
-        "main_sample_discount_type": str(type(m_sample.get('discount','')).__name__) if m_sample else ""
-    }
 if __name__=="__main__":
     import uvicorn; uvicorn.run(app,host="0.0.0.0",port=8000)
