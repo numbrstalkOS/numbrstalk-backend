@@ -1,13 +1,13 @@
 """
-Numbrstalk.com - Commerce Diagnosis Engine v10.0
-Leak Stage → Reason Bucket → Evidence → Priority → Confidence
+Numbrstalk.com - Commerce Diagnosis Engine v11.0
+Leak Stage → Reason Bucket → Evidence → Comparison → Likely Cause → Missing Data → Impact → Follow-up
 """
 from fastapi import FastAPI, HTTPException, Query, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 import csv, io, json, os, re
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 from pathlib import Path
 from pydantic import BaseModel
@@ -15,7 +15,7 @@ from collections import defaultdict
 
 DATA_DIR = Path("data")
 
-app = FastAPI(title="Numbrstalk Diagnosis Engine", version="10.0.0")
+app = FastAPI(title="Numbrstalk Diagnosis Engine", version="11.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 main_data, change_data, insight_data = [], [], []
@@ -71,7 +71,7 @@ def parse_changes(category=None):
     data = change_data
     if category: data = [r for r in data if str(r.get('keyword','')).strip().lower() == category.lower()]
     result = {"total_changes":len(data),"change_types":[],"keywords":[],"locations":[],"severity":{"Critical":0,"High":0,"Medium":0,"Low":0},"rank_drops":[],"rank_improvements":[],"new_entries":[],"disappeared":[],"platforms":[]}
-    tc,kc,lc,pc = defaultdict(int),defaultdict(int),defaultdict(int),defaultdict(int)
+    tc,kc,lc = defaultdict(int),defaultdict(int),defaultdict(int)
     for row in data:
         issue=str(row.get('issue_type','')).strip(); sev=str(row.get('severity','')).strip()
         kw=str(row.get('keyword','')).strip(); loc=str(row.get('location','')).strip()
@@ -80,7 +80,6 @@ def parse_changes(category=None):
         if issue: tc[issue]+=1
         if kw: kc[kw]+=1
         if loc: lc[loc]+=1
-        if plat: pc[plat]+=1
         if sev in result['severity']: result['severity'][sev]+=1
         try:
             old=int(old_r) if old_r.replace('-','').isdigit() else 0
@@ -97,60 +96,20 @@ def parse_changes(category=None):
     return result
 
 # ============================================================================
-# DIAGNOSIS ENGINE — Leak Stage + Reason Bucket + Priority + Confidence
+# DIAGNOSIS ENGINE v11.0 — Full comparison + likely vs confirmed + missing data
 # ============================================================================
 
-def determine_leak_stage(change_type, rank_drop, discount, stock_status, is_disappeared, is_new_entry):
-    """Classify where the business is leaking."""
-    if stock_status and 'out' in str(stock_status).lower():
-        return "Stock / Availability"
-    if is_disappeared:
-        return "Visibility"
-    if rank_drop and rank_drop >= 10:
-        return "Visibility"
-    if rank_drop and 5 <= rank_drop < 10:
-        return "Visibility"
-    if discount and discount > 40:
-        return "Competitor Pressure"
-    if is_new_entry:
-        return "Competitor Pressure"
-    return "Visibility"
-
-def determine_reason_bucket(leak_stage, discount, rank_drop, is_disappeared):
-    """Classify the likely reason for the leak."""
-    if leak_stage == "Visibility":
-        if is_disappeared: return "Competitor Issue"
-        if rank_drop and rank_drop >= 10: return "Competitor Issue"
-        return "Visibility Issue"
-    if leak_stage == "Competitor Pressure":
-        if discount and discount > 40: return "Pricing Issue"
-        return "Competitor Issue"
-    if leak_stage == "Stock / Availability":
-        return "Stock Issue"
-    return "Visibility Issue"
-
-def calculate_priority(leak_stage, rank_drop, discount, is_disappeared):
-    """Calculate priority score."""
-    if leak_stage == "Stock / Availability": return "High"
-    if is_disappeared: return "High"
-    if rank_drop and rank_drop >= 10: return "High"
-    if discount and discount > 50: return "High"
-    if rank_drop and rank_drop >= 5: return "Medium"
-    return "Low"
-
-def calculate_confidence(has_rank_data, has_discount_data, has_stock_data, has_competitor_data):
-    """Calculate confidence based on available evidence."""
-    score = 0
-    if has_rank_data: score += 30
-    if has_discount_data: score += 25
-    if has_stock_data: score += 25
-    if has_competitor_data: score += 20
-    if score >= 80: return "High"
-    if score >= 50: return "Medium"
-    return "Low"
+def get_category_avg_rank(keyword):
+    """Get average rank for a keyword category."""
+    ranks = []
+    for r in change_data:
+        if str(r.get('keyword','')).strip().lower() == keyword.lower():
+            try: ranks.append(int(r.get('new_rank',0)))
+            except: pass
+    return round(sum(ranks)/len(ranks),1) if ranks else 0
 
 def generate_alerts(category=None):
-    """Generate alerts with full diagnosis: Leak Stage + Reason + Priority + Confidence."""
+    """Generate alerts with v11.0 diagnosis: Comparison, Confirmed/Likely, Missing Data, Impact, Follow-up."""
     alerts = []
     changes = parse_changes(category)
     products = get_products(category)
@@ -161,25 +120,54 @@ def generate_alerts(category=None):
             new_r = int(drop.get('new_rank', 0))
             diff = new_r - old_r
             if diff >= 5:
-                leak_stage = determine_leak_stage("rank_drop", diff, None, None, False, False)
-                reason_bucket = determine_reason_bucket(leak_stage, None, diff, False)
-                priority = calculate_priority(leak_stage, diff, None, False)
-                confidence = calculate_confidence(True, False, False, True)
+                keyword = drop.get('keyword','')
+                location = drop.get('location','Bangalore')
+                product = drop.get('product','')
+                platform = drop.get('platform','Blinkit')
+                cat_avg = get_category_avg_rank(keyword)
+                review_date = (datetime.now() + timedelta(days=3)).strftime('%B %d, %Y')
                 
                 alerts.append({
-                    "id": f"alt_{abs(hash(drop.get('product','')))%100000}",
-                    "platform": drop.get('platform', 'Blinkit'),
-                    "city": drop.get('location', 'Bangalore'),
-                    "sku": drop.get('product', ''),
-                    "category": drop.get('keyword', ''),
+                    "id": f"alt_{abs(hash(product))%100000}",
+                    "platform": platform,
+                    "city": location,
+                    "sku": product,
+                    "category": keyword,
                     "issue": "Critical Rank Drop" if diff >= 10 else "Rank Slipping",
-                    "reason": f"Rank dropped from #{old_r} to #{new_r} ({diff} positions). Competitor may have gained visibility.",
-                    "leak_stage": leak_stage,
-                    "reason_bucket": reason_bucket,
-                    "priority": priority,
-                    "confidence": confidence,
-                    "evidence": f"Rank movement: #{old_r} → #{new_r}. Location: {drop.get('location','Bangalore')}. Keyword: {drop.get('keyword','')}.",
-                    "recommended_action": f"Check competitor pricing and stock for '{drop.get('keyword','')}' in {drop.get('location','Bangalore')}. Review your discount vs category average.",
+                    
+                    # Core diagnosis
+                    "leak_stage": "Visibility",
+                    "reason_bucket": "Competitor Issue" if diff >= 8 else "Visibility Issue",
+                    "priority": "High" if diff >= 10 else "Medium",
+                    "confidence": "High" if cat_avg > 0 else "Medium",
+                    
+                    # Confirmed evidence vs likely cause
+                    "confirmed_evidence": f"Rank dropped from #{old_r} to #{new_r} ({diff} positions lost) in {location} for '{keyword}'.",
+                    "likely_cause": "Competitor visibility or offer pressure. A competing product may have gained rank, pushing this SKU down.",
+                    "missing_data_needed": [
+                        "Competitor pricing and discount data for this keyword",
+                        "Sales/orders report to confirm revenue impact",
+                        "Ad spend and visibility data to check if paid visibility changed"
+                    ],
+                    
+                    # Comparison
+                    "compared_against": f"Category average rank for '{keyword}' is #{cat_avg}. Your product was at #{old_r}, now at #{new_r}.",
+                    
+                    # Action plan
+                    "what_to_check_first": [
+                        f"Compare your price and discount vs top 5 competitors in '{keyword}'",
+                        f"Check stock availability in {location}",
+                        "Review sponsored ad visibility and keyword bids"
+                    ],
+                    "recommended_action": f"Compare pricing for '{keyword}' in {location}. If your discount is below category average, consider a tactical offer.",
+                    "expected_impact": "If discount gap is confirmed, adjusting offer depth may recover rank within 3-5 days.",
+                    
+                    # Follow-up
+                    "review_date": review_date,
+                    "success_signal": f"Rank returns to top 5 for '{keyword}'",
+                    "if_not_improved": "Increase ad visibility or launch a limited-time bundle offer",
+                    
+                    # Metadata
                     "impact": "High" if diff >= 10 else "Medium",
                     "detected_at": datetime.now().isoformat(),
                     "status": "Pending"
@@ -187,40 +175,63 @@ def generate_alerts(category=None):
         except: pass
     
     for d in changes.get('disappeared', [])[:3]:
+        product = d.get('product','')
+        keyword = d.get('keyword','')
+        location = d.get('location','Bangalore')
+        review_date = (datetime.now() + timedelta(days=2)).strftime('%B %d, %Y')
+        
         alerts.append({
-            "id": f"alt_{abs(hash(d.get('product','')))%100000}",
-            "platform": d.get('platform', 'Blinkit'),
-            "city": d.get('location', 'Bangalore'),
-            "sku": d.get('product', ''),
-            "category": d.get('keyword', ''),
+            "id": f"alt_{abs(hash(product))%100000}",
+            "platform": d.get('platform','Blinkit'),
+            "city": location,
+            "sku": product,
+            "category": keyword,
             "issue": "Product Disappeared",
-            "reason": f"'{d.get('product','')}' vanished from top 30. Likely delisted, out of stock, or pushed out by competitors.",
             "leak_stage": "Visibility",
             "reason_bucket": "Competitor Issue",
             "priority": "High",
             "confidence": "High",
-            "evidence": f"Product was in top 30 and disappeared. Location: {d.get('location','Bangalore')}. Keyword: {d.get('keyword','')}.",
-            "recommended_action": "Check stock status, listing status, and competitor entries in this category immediately.",
+            "confirmed_evidence": f"'{product}' vanished from top 30 rankings in {location} for '{keyword}'.",
+            "likely_cause": "Product may be out of stock, delisted, or pushed out by competitor entries.",
+            "missing_data_needed": ["Stock status confirmation", "Listing status on platform", "Competitor new entry data"],
+            "compared_against": f"Previous ranking position in top 30 for '{keyword}' category.",
+            "what_to_check_first": ["Verify stock availability immediately", "Check if listing is active on the platform", "Look for new competitor products in this category"],
+            "recommended_action": "Check stock status and listing visibility urgently. If delisted, contact platform support.",
+            "expected_impact": "Restoring visibility can recover ranking within 24-48 hours if stock is available.",
+            "review_date": review_date,
+            "success_signal": "Product reappears in top 30 rankings",
+            "if_not_improved": "Investigate competitor entries and consider ad visibility boost",
             "impact": "High",
             "detected_at": datetime.now().isoformat(),
             "status": "Pending"
         })
     
     for entry in changes.get('new_entries', [])[:2]:
+        product = entry.get('product','')
+        keyword = entry.get('keyword','')
+        review_date = (datetime.now() + timedelta(days=3)).strftime('%B %d, %Y')
+        
         alerts.append({
-            "id": f"alt_{abs(hash(entry.get('product','')))%100000}",
-            "platform": entry.get('platform', 'Blinkit'),
-            "city": entry.get('location', 'Bangalore'),
-            "sku": entry.get('product', ''),
-            "category": entry.get('keyword', ''),
+            "id": f"alt_{abs(hash(product))%100000}",
+            "platform": entry.get('platform','Blinkit'),
+            "city": entry.get('location','Bangalore'),
+            "sku": product,
+            "category": keyword,
             "issue": "New Competitor Entry",
-            "reason": f"'{entry.get('product','')}' entered top 30. New competition in '{entry.get('keyword','')}'.",
             "leak_stage": "Competitor Pressure",
             "reason_bucket": "Competitor Issue",
             "priority": "Medium",
             "confidence": "Medium",
-            "evidence": f"New entry at rank #{entry.get('new_rank','?')}. Keyword: {entry.get('keyword','')}. Location: {entry.get('location','Bangalore')}.",
-            "recommended_action": "Track this competitor's price, discount, and rank for 48 hours.",
+            "confirmed_evidence": f"'{product}' entered top 30 at rank #{entry.get('new_rank','?')} in '{keyword}'.",
+            "likely_cause": "New competitor launching in this category. May affect existing product visibility and pricing.",
+            "missing_data_needed": ["New entrant's pricing strategy", "Their discount and offer structure", "Their stock availability"],
+            "compared_against": "Existing top 30 competitors in this category.",
+            "what_to_check_first": ["Track new entrant's price and discount for 48 hours", "Monitor if they gain further rank", "Check if they're running promotional offers"],
+            "recommended_action": "Monitor this competitor for 48 hours. Prepare a response if they gain significant traction.",
+            "expected_impact": "Early detection allows proactive response before market share is affected.",
+            "review_date": review_date,
+            "success_signal": "New entrant's rank stabilizes or declines",
+            "if_not_improved": "Consider a defensive offer or ad visibility increase",
             "impact": "Medium",
             "detected_at": datetime.now().isoformat(),
             "status": "Pending"
@@ -234,7 +245,7 @@ def generate_alerts(category=None):
 
 @app.get("/api/health")
 async def health():
-    return {"status":"ok","version":"10.0","data_rows":len(main_data),"change_rows":len(change_data)}
+    return {"status":"ok","version":"11.0","data_rows":len(main_data),"change_rows":len(change_data)}
 
 @app.get("/api/categories")
 async def categories():
@@ -242,8 +253,7 @@ async def categories():
 
 @app.get("/api/dashboard")
 async def dashboard(category: Optional[str] = None):
-    prods = get_products(category)
-    return {"totalProducts":len(prods),"lastUpdated":str(last_refresh)}
+    return {"totalProducts":len(get_products(category)),"lastUpdated":str(last_refresh)}
 
 @app.get("/api/products")
 async def products(category: Optional[str] = None):
@@ -261,7 +271,7 @@ async def insights_ai(category: Optional[str] = None):
     tl = c['locations'][0] if c['locations'] else {'location':'N/A','changes':0}
     tk = c['keywords'][0] if c['keywords'] else {'keyword':'N/A','changes':0}
     mc = c['change_types'][0] if c['change_types'] else {'type':'N/A','count':0}
-    return {"headline":f"📊 {c['total_changes']:,} changes — {mc['type']} dominant","summary":f"{c['total_changes']:,} changes. {tl['location']} leads.","key_metrics":{"total_changes":c['total_changes'],"critical_alerts":c['severity']['Critical'],"top_location":tl['location'],"main_risk":mc['type']},"critical_issues":[f"{mc['type']}: {mc['count']}",f"{tl['location']}: {tl['changes']}",f"'{tk['keyword']}': {tk['changes']}"],"actions":[{"priority":"High","action":f"Audit {tl['location']}"},{"priority":"Medium","action":f"Review '{tk['keyword']}'"}]}
+    return {"headline":f"📊 {c['total_changes']:,} changes","summary":f"{c['total_changes']:,} changes. {tl['location']} leads.","key_metrics":{"total_changes":c['total_changes'],"critical_alerts":c['severity']['Critical'],"top_location":tl['location'],"main_risk":mc['type']},"critical_issues":[f"{mc['type']}: {mc['count']}"],"actions":[{"priority":"High","action":f"Audit {tl['location']}"}]}
 
 @app.get("/api/top-brands")
 async def top_brands(limit:int=5, category: Optional[str] = None):
@@ -309,7 +319,8 @@ async def chat(request:ChatRequest):
     a = generate_alerts()
     high = [x for x in a if x['priority']=='High']
     if high:
-        return {"answer":f"🚨 {len(high)} high-priority issues. Top leak: {high[0]['leak_stage']} — {high[0]['reason_bucket']}. {high[0]['recommended_action']}"}
+        h = high[0]
+        return {"answer":f"🚨 {len(high)} high-priority issues. Top: {h['issue']} — {h['confirmed_evidence']} Likely cause: {h['likely_cause']} Review by: {h['review_date']}."}
     return {"answer":"I'm Lilly! No critical leaks detected. Check the Alerts tab for details."}
 
 if __name__=="__main__":
