@@ -87,7 +87,12 @@ def get_top_brands(limit=5, category=None):
     res = []
     for b, ds in bd.items():
         if len(ds) >= 3:  # Only brands with 3+ products
+            res = []
+    for b, ds in bd.items():
+        if len(ds) >= 3:  # Only brands with 3+ products
             res.append({"brand":b,"avg_discount":round(sum(ds)/len(ds),1),"product_count":len(ds)})
+    res.sort(key=lambda x:x['avg_discount'], reverse=True)
+    return res[:limit] if res else [{"brand":"No data","avg_discount":0,"product_count":0}]
     res.sort(key=lambda x:x['avg_discount'], reverse=True)
     return res[:limit] if res else [{"brand":"No data","avg_discount":0,"product_count":0}]
 
