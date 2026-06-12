@@ -22,13 +22,10 @@ main_data, change_data, insight_data = [], [], []
 last_refresh = None
 
 class ChatRequest(BaseModel):
-    question: str
-
-def load_json(fp):
-    if not fp.exists(): return []
-    with open(fp, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    return data if isinstance(data, list) else []
+    question: str = ""
+    message: str = ""
+    category: Optional[str] = None
+    history: Optional[list] = None
 
 def refresh():
     global main_data, change_data, insight_data, last_refresh
