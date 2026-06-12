@@ -217,6 +217,80 @@ async def chat(request:ChatRequest):
     if c['total_changes']>0:
         return {"answer":f"Latest scan: {c['total_changes']:,} changes across {len(c['locations'])} locations. Top issue: {c['change_types'][0]['type'] if c['change_types'] else 'N/A'}. Check AI Insights tab for details."}
     return {"answer":"I'm Lilly! No recent scan data yet. Check the AI Insights tab or upload a CSV for diagnosis."}
-
+@app.get("/api/report/category")
+async def category_report(category: str):
+    """Generate a category intelligence report."""
+    # Fetch products for this category
+    products = []
+    for r in main_data:
+        if category.lower() in str(r.get('keyword', '')).lower() or category.lower() in str(r.get('category', '')).lower():
+            products.append({
+                "name": str(r.get('product_name', '')),
+                "brand": str(r.get('brand', '')),
+                "price": safe_float(r.get('price')),
+                "discount": parse_discount(r.get('discount', '')),
+                "platform": str(r.get('platform', '')),
+                "city": str(r.get('city', ''))
+            })
+    
+    if not products:
+        return {"error": f"No data found for '{category}'. Try: coconut water, biscuits, chips, lipstick, bread, milk"}
+    
+    # Analyze
+    brands = defaultdict(lambda: {"count": 0, "prices": [], "discounts": []})
+    prices = []
+    discounts = []
+    platforms = set()
+    
+    for p in products:
+        b = p['brand']
+        brands[b]["count"] += 1
+        if p['price'] > 0:
+            brands[b]["prices"].append(p['price'])
+            prices.append(p['price'])
+        if p['discount'] > 0:
+            brands[b]["discounts"].append(p['discount'])
+            discounts.append(p['discount'])
+        if p['platform']: platforms.add(p['platform'])
+    
+    # Top brands
+    top_brands = sorted(brands.items(), key=lambda x: x[1]["count"], reverse=True)[:10]
+    top_brands_list = []
+    for name, data in top_brands:
+        avg_price = round(sum(data["prices"]) / len(data["prices"]), 1) if data["prices"] else 0
+        avg_discount = round(sum(data["discounts"]) / len(data["discounts"]), 1) if data["discounts"] else 0
+        top_brands_list.append({
+            "brand": name,
+            "products": data["count"],
+            "avg_price": avg_price,
+            "avg_discount": avg_discount
+        })
+    
+    # Price ranges
+    price_ranges = {"Under ₹50": 0, "₹50-100": 0, "₹100-200": 0, "₹200+": 0}
+    for p in prices:
+        if p < 50: price_ranges["Under ₹50"] += 1
+        elif p < 100: price_ranges["₹50-100"] += 1
+        elif p < 200: price_ranges["₹100-200"] += 1
+        else: price_ranges["₹200+"] += 1
+    
+    # High discount products
+    high_discount = [p for p in products if p['discount'] > 30][:5]
+    
+    return {
+        "category": category,
+        "total_products": len(products),
+        "total_brands": len(brands),
+        "avg_price": round(sum(prices)/len(prices), 1) if prices else 0,
+        "min_price": min(prices) if prices else 0,
+        "max_price": max(prices) if prices else 0,
+        "avg_discount": round(sum(discounts)/len(discounts), 1) if discounts else 0,
+        "discounting_products": len(discounts),
+        "platforms": list(platforms),
+        "top_brands": top_brands_list,
+        "price_ranges": price_ranges,
+        "high_discount_products": [{"name": p['name'][:50], "brand": p['brand'], "discount": p['discount']} for p in high_discount],
+        "sample_products": products[:20]
+    }
 if __name__=="__main__":
     import uvicorn; uvicorn.run(app,host="0.0.0.0",port=8000)
