@@ -1,6 +1,6 @@
 """
-Numbrstalk.com - Commerce Diagnosis Engine v11.0
-Leak Stage → Reason Bucket → Evidence → Comparison → Likely Cause → Missing Data → Impact → Follow-up
+Numbrstalk.com - Commerce Diagnosis Engine v13.0
+Complete Diagnosis Result + Missing Data + Confidence Upgrade + Auto-Tasks + Demo
 """
 from fastapi import FastAPI, HTTPException, Query, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,7 +15,7 @@ from collections import defaultdict
 
 DATA_DIR = Path("data")
 
-app = FastAPI(title="Numbrstalk Diagnosis Engine", version="11.0.0")
+app = FastAPI(title="Numbrstalk Diagnosis Engine", version="13.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 main_data, change_data, insight_data = [], [], []
@@ -95,12 +95,7 @@ def parse_changes(category=None):
     for l,c in sorted(lc.items(),key=lambda x:x[1],reverse=True)[:10]: result['locations'].append({"location":l,"changes":c})
     return result
 
-# ============================================================================
-# DIAGNOSIS ENGINE v11.0 — Full comparison + likely vs confirmed + missing data
-# ============================================================================
-
 def get_category_avg_rank(keyword):
-    """Get average rank for a keyword category."""
     ranks = []
     for r in change_data:
         if str(r.get('keyword','')).strip().lower() == keyword.lower():
@@ -109,11 +104,9 @@ def get_category_avg_rank(keyword):
     return round(sum(ranks)/len(ranks),1) if ranks else 0
 
 def generate_alerts(category=None):
-    """Generate alerts with v11.0 diagnosis: Comparison, Confirmed/Likely, Missing Data, Impact, Follow-up."""
     alerts = []
     changes = parse_changes(category)
     products = get_products(category)
-    
     for drop in changes.get('rank_drops', []):
         try:
             old_r = int(drop.get('old_rank', 0))
@@ -123,63 +116,39 @@ def generate_alerts(category=None):
                 keyword = drop.get('keyword','')
                 location = drop.get('location','Bangalore')
                 product = drop.get('product','')
-                platform = drop.get('platform','Blinkit')
                 cat_avg = get_category_avg_rank(keyword)
                 review_date = (datetime.now() + timedelta(days=3)).strftime('%B %d, %Y')
-                
                 alerts.append({
                     "id": f"alt_{abs(hash(product))%100000}",
-                    "platform": platform,
+                    "platform": drop.get('platform','Blinkit'),
                     "city": location,
                     "sku": product,
                     "category": keyword,
                     "issue": "Critical Rank Drop" if diff >= 10 else "Rank Slipping",
-                    
-                    # Core diagnosis
                     "leak_stage": "Visibility",
                     "reason_bucket": "Competitor Issue" if diff >= 8 else "Visibility Issue",
                     "priority": "High" if diff >= 10 else "Medium",
                     "confidence": "High" if cat_avg > 0 else "Medium",
-                    
-                    # Confirmed evidence vs likely cause
                     "confirmed_evidence": f"Rank dropped from #{old_r} to #{new_r} ({diff} positions lost) in {location} for '{keyword}'.",
-                    "likely_cause": "Competitor visibility or offer pressure. A competing product may have gained rank, pushing this SKU down.",
-                    "missing_data_needed": [
-                        "Competitor pricing and discount data for this keyword",
-                        "Sales/orders report to confirm revenue impact",
-                        "Ad spend and visibility data to check if paid visibility changed"
-                    ],
-                    
-                    # Comparison
-                    "compared_against": f"Category average rank for '{keyword}' is #{cat_avg}. Your product was at #{old_r}, now at #{new_r}.",
-                    
-                    # Action plan
-                    "what_to_check_first": [
-                        f"Compare your price and discount vs top 5 competitors in '{keyword}'",
-                        f"Check stock availability in {location}",
-                        "Review sponsored ad visibility and keyword bids"
-                    ],
-                    "recommended_action": f"Compare pricing for '{keyword}' in {location}. If your discount is below category average, consider a tactical offer.",
-                    "expected_impact": "If discount gap is confirmed, adjusting offer depth may recover rank within 3-5 days.",
-                    
-                    # Follow-up
+                    "likely_cause": "Competitor visibility or offer pressure.",
+                    "missing_data_needed": ["Competitor pricing data", "Sales report to confirm revenue impact"],
+                    "compared_against": f"Category average rank is #{cat_avg}.",
+                    "what_to_check_first": [f"Compare your discount vs top 5 in '{keyword}'", f"Check stock in {location}", "Review ad visibility"],
+                    "recommended_action": f"Compare pricing for '{keyword}' in {location}. If discount is below average, consider a tactical offer.",
+                    "expected_impact": "Adjusting offer depth may recover rank in 3-5 days.",
                     "review_date": review_date,
-                    "success_signal": f"Rank returns to top 5 for '{keyword}'",
-                    "if_not_improved": "Increase ad visibility or launch a limited-time bundle offer",
-                    
-                    # Metadata
+                    "success_signal": f"Rank returns to top 5",
+                    "if_not_improved": "Increase ad visibility or launch bundle offer",
                     "impact": "High" if diff >= 10 else "Medium",
                     "detected_at": datetime.now().isoformat(),
                     "status": "Pending"
                 })
         except: pass
-    
     for d in changes.get('disappeared', [])[:3]:
         product = d.get('product','')
         keyword = d.get('keyword','')
         location = d.get('location','Bangalore')
         review_date = (datetime.now() + timedelta(days=2)).strftime('%B %d, %Y')
-        
         alerts.append({
             "id": f"alt_{abs(hash(product))%100000}",
             "platform": d.get('platform','Blinkit'),
@@ -191,26 +160,24 @@ def generate_alerts(category=None):
             "reason_bucket": "Competitor Issue",
             "priority": "High",
             "confidence": "High",
-            "confirmed_evidence": f"'{product}' vanished from top 30 rankings in {location} for '{keyword}'.",
-            "likely_cause": "Product may be out of stock, delisted, or pushed out by competitor entries.",
-            "missing_data_needed": ["Stock status confirmation", "Listing status on platform", "Competitor new entry data"],
-            "compared_against": f"Previous ranking position in top 30 for '{keyword}' category.",
-            "what_to_check_first": ["Verify stock availability immediately", "Check if listing is active on the platform", "Look for new competitor products in this category"],
-            "recommended_action": "Check stock status and listing visibility urgently. If delisted, contact platform support.",
-            "expected_impact": "Restoring visibility can recover ranking within 24-48 hours if stock is available.",
+            "confirmed_evidence": f"'{product}' vanished from top 30 in {location}.",
+            "likely_cause": "Product may be out of stock, delisted, or pushed out by competitors.",
+            "missing_data_needed": ["Stock status", "Listing status on platform"],
+            "compared_against": f"Previous top 30 ranking for '{keyword}'.",
+            "what_to_check_first": ["Verify stock availability", "Check listing status", "Look for new competitor entries"],
+            "recommended_action": "Check stock and listing status urgently.",
+            "expected_impact": "Restoring visibility can recover ranking in 24-48 hours.",
             "review_date": review_date,
-            "success_signal": "Product reappears in top 30 rankings",
-            "if_not_improved": "Investigate competitor entries and consider ad visibility boost",
+            "success_signal": "Product reappears in top 30",
+            "if_not_improved": "Investigate competitor entries and consider ad boost",
             "impact": "High",
             "detected_at": datetime.now().isoformat(),
             "status": "Pending"
         })
-    
     for entry in changes.get('new_entries', [])[:2]:
         product = entry.get('product','')
         keyword = entry.get('keyword','')
         review_date = (datetime.now() + timedelta(days=3)).strftime('%B %d, %Y')
-        
         alerts.append({
             "id": f"alt_{abs(hash(product))%100000}",
             "platform": entry.get('platform','Blinkit'),
@@ -222,22 +189,47 @@ def generate_alerts(category=None):
             "reason_bucket": "Competitor Issue",
             "priority": "Medium",
             "confidence": "Medium",
-            "confirmed_evidence": f"'{product}' entered top 30 at rank #{entry.get('new_rank','?')} in '{keyword}'.",
-            "likely_cause": "New competitor launching in this category. May affect existing product visibility and pricing.",
-            "missing_data_needed": ["New entrant's pricing strategy", "Their discount and offer structure", "Their stock availability"],
-            "compared_against": "Existing top 30 competitors in this category.",
-            "what_to_check_first": ["Track new entrant's price and discount for 48 hours", "Monitor if they gain further rank", "Check if they're running promotional offers"],
-            "recommended_action": "Monitor this competitor for 48 hours. Prepare a response if they gain significant traction.",
-            "expected_impact": "Early detection allows proactive response before market share is affected.",
+            "confirmed_evidence": f"'{product}' entered top 30 at #{entry.get('new_rank','?')} in '{keyword}'.",
+            "likely_cause": "New competitor launching in this category.",
+            "missing_data_needed": ["New entrant's pricing", "Their discount structure"],
+            "compared_against": "Existing top 30 competitors.",
+            "what_to_check_first": ["Track new entrant's price for 48 hours", "Monitor rank movement"],
+            "recommended_action": "Monitor for 48 hours. Prepare response if they gain traction.",
+            "expected_impact": "Early detection allows proactive response.",
             "review_date": review_date,
             "success_signal": "New entrant's rank stabilizes or declines",
-            "if_not_improved": "Consider a defensive offer or ad visibility increase",
+            "if_not_improved": "Consider defensive offer or ad increase",
             "impact": "Medium",
             "detected_at": datetime.now().isoformat(),
             "status": "Pending"
         })
-    
     return alerts[:25]
+
+# ============================================================================
+# REPORT TEMPLATES (v12.0)
+# ============================================================================
+
+REPORT_TEMPLATES = {
+    "sales": {"required":["orders","revenue","date"],"optional":["product_name","brand","category","platform","city","quantity","avg_order_value","returns","cancellations"],"label":"Sales Report"},
+    "ads": {"required":["spend","impressions","clicks"],"optional":["ctr","cpc","cpa","roas","conversion_rate","campaign_name","keyword","audience","platform"],"label":"Ads / Marketing Report"},
+    "stock": {"required":["product_name","stock_quantity","date"],"optional":["warehouse","city","pincode","in_stock_pct","reorder_level","days_of_cover","listing_status"],"label":"Inventory / Stock Report"},
+    "funnel": {"required":["sessions","product_views","add_to_cart","checkout_initiated","orders"],"optional":["payment_attempted","payment_successful","bounce_rate","device","traffic_source","landing_page"],"label":"Funnel / Conversion Report"},
+    "payment": {"required":["payment_attempted","payment_successful","date"],"optional":["payment_failure_rate","upi_success","card_success","cod_usage","razorpay_drop","payment_method","gateway"],"label":"Payment / Gateway Report"},
+    "competitor_pricing": {"required":["competitor_name","product_name","competitor_price","date"],"optional":["our_price","competitor_discount","competitor_rank","platform","city"],"label":"Competitor Pricing Report"}
+}
+
+def detect_report_type(columns):
+    columns_lower = [c.lower().strip() for c in columns]
+    scores = {}
+    for report_type, template in REPORT_TEMPLATES.items():
+        required = template["required"]
+        optional = template["optional"]
+        matched_required = [c for c in required if c in columns_lower]
+        matched_optional = [c for c in optional if c in columns_lower]
+        score = (len(matched_required)/len(required)*60) + (len(matched_optional)/len(optional)*40) if required else 0
+        scores[report_type] = {"label":template["label"],"score":round(score,1),"matched_required":matched_required,"matched_optional":matched_optional,"missing_required":[c for c in required if c not in columns_lower],"missing_optional":[c for c in optional if c not in columns_lower],"total_columns_expected":len(required)+len(optional),"total_columns_matched":len(matched_required)+len(matched_optional)}
+    best = max(scores.items(),key=lambda x:x[1]["score"]) if scores else (None,{"score":0})
+    return {"detected_type":best[0],"details":best[1],"all_scores":{k:v["score"] for k,v in scores.items()}}
 
 # ============================================================================
 # API ENDPOINTS
@@ -245,7 +237,7 @@ def generate_alerts(category=None):
 
 @app.get("/api/health")
 async def health():
-    return {"status":"ok","version":"11.0","data_rows":len(main_data),"change_rows":len(change_data)}
+    return {"status":"ok","version":"13.0","data_rows":len(main_data),"change_rows":len(change_data)}
 
 @app.get("/api/categories")
 async def categories():
@@ -308,6 +300,143 @@ async def template():
     output.seek(0)
     return StreamingResponse(output,media_type="text/csv",headers={"Content-Disposition":"attachment; filename=template.csv"})
 
+@app.post("/api/upload/map")
+async def upload_and_map(file: UploadFile = File(...)):
+    content = await file.read()
+    if file.filename.endswith('.csv'): df = pd.read_csv(io.BytesIO(content))
+    elif file.filename.endswith(('.xlsx','.xls')): df = pd.read_excel(io.BytesIO(content))
+    else: raise HTTPException(400, "Unsupported format.")
+    if df.empty: raise HTTPException(400, "File is empty.")
+    detection = detect_report_type(list(df.columns))
+    confidence_boost = 0
+    if detection["detected_type"]:
+        score = detection["details"]["score"]
+        if score >= 80: confidence_boost = 0.3
+        elif score >= 50: confidence_boost = 0.15
+        else: confidence_boost = 0.05
+    return {
+        "filename":file.filename,"rows":len(df),"columns_found":list(df.columns),
+        "report_detection":{"detected_type":detection["detected_type"],"label":detection["details"].get("label","Unknown"),"match_score":detection["details"].get("score",0),"matched_columns":detection["details"].get("total_columns_matched",0),"expected_columns":detection["details"].get("total_columns_expected",0)},
+        "mapping":{"matched_required":detection["details"].get("matched_required",[]),"matched_optional":detection["details"].get("matched_optional",[]),"missing_required":detection["details"].get("missing_required",[]),"missing_optional":detection["details"].get("missing_optional",[])},
+        "confidence_upgrade":f"+{int(confidence_boost*100)}%",
+        "next_steps":"Upload missing columns for more precise diagnosis." if detection["details"].get("missing_required") else "All required columns present."
+    }
+
+# ============================================================================
+# v13.0 — FULL DIAGNOSIS + MISSING DATA + CONFIDENCE UPGRADE + AUTO-TASKS + DEMO
+# ============================================================================
+
+@app.post("/api/diagnose/full")
+async def full_diagnosis(file: UploadFile = File(...)):
+    content = await file.read()
+    if file.filename.endswith('.csv'): df = pd.read_csv(io.BytesIO(content))
+    elif file.filename.endswith(('.xlsx','.xls')): df = pd.read_excel(io.BytesIO(content))
+    else: raise HTTPException(400, "Unsupported format.")
+    
+    columns = list(df.columns)
+    columns_lower = [c.lower().strip() for c in columns]
+    detection = detect_report_type(columns)
+    
+    has_sales = any(c in columns_lower for c in ["orders","revenue"])
+    has_funnel = any(c in columns_lower for c in ["add_to_cart","checkout_initiated"])
+    has_payment = any(c in columns_lower for c in ["payment_successful","payment_success_rate"])
+    has_ads = any(c in columns_lower for c in ["spend","roas","cpc"])
+    has_stock = any(c in columns_lower for c in ["stock_quantity","in_stock_pct"])
+    has_competitor = any(c in columns_lower for c in ["competitor_price","competitor_name"])
+    
+    diagnosis = {
+        "issue":"Performance Analysis","leak_stage":"Insufficient Data","reason_bucket":"Multiple Factors Possible",
+        "confidence":"Low","confirmed_evidence":[],"likely_cause":"","what_to_check_first":[],
+        "recommended_action":"","review_date":(datetime.now()+timedelta(days=3)).strftime("%B %d, %Y"),
+        "success_signal":"","missing_data_prompt":[],"auto_tasks":[],"confidence_upgrade_path":[]
+    }
+    
+    evidence = []
+    
+    if "payment_success_rate" in columns_lower:
+        ps = pd.to_numeric(df["payment_success_rate"], errors='coerce').mean()
+        evidence.append(f"Payment success rate: {ps:.0f}%")
+        if ps < 70:
+            diagnosis["leak_stage"] = "Payment"
+            diagnosis["reason_bucket"] = "Payment Gateway Issue"
+            diagnosis["issue"] = "Payment Leak Detected"
+            diagnosis["confirmed_evidence"].append(f"Payment success rate is {ps:.0f}% — below 70% threshold")
+            diagnosis["likely_cause"] = "UPI failure, Razorpay timeout, or COD unavailability"
+            diagnosis["what_to_check_first"] = ["Razorpay/UPI failure logs","COD availability by pincode","Payment gateway response time"]
+            diagnosis["recommended_action"] = "Fix payment gateway issues before increasing ad spend. Check UPI success rates and consider backup provider."
+            diagnosis["success_signal"] = "Payment success rate returns above 75%"
+            diagnosis["auto_tasks"] = ["Check Razorpay UPI failure logs","Verify COD availability for top 10 pincodes","Test payment gateway with test transaction","Review payment success rate after 48 hours"]
+    
+    if "add_to_cart" in columns_lower and "checkout_initiated" in columns_lower:
+        atc = pd.to_numeric(df["add_to_cart"], errors='coerce').sum()
+        ci = pd.to_numeric(df["checkout_initiated"], errors='coerce').sum()
+        if atc > 0:
+            rate = ci/atc
+            evidence.append(f"Cart-to-Checkout rate: {rate:.1%}")
+            if rate < 0.4:
+                diagnosis["leak_stage"] = "Cart-to-Checkout"
+                diagnosis["reason_bucket"] = "Cart Friction"
+                diagnosis["issue"] = "Checkout Drop-off"
+                diagnosis["confirmed_evidence"].append(f"Only {rate:.0%} of add-to-carts reach checkout")
+                diagnosis["likely_cause"] = "Delivery charge shock, forced login, or missing COD"
+                diagnosis["auto_tasks"].extend(["Check delivery charge impact on cart abandonment","Verify if COD is available for affected pincodes"])
+    
+    if "in_stock_pct" in columns_lower:
+        stock = pd.to_numeric(df["in_stock_pct"], errors='coerce').mean()
+        evidence.append(f"In-stock: {stock:.0f}%")
+        if stock < 70:
+            diagnosis["leak_stage"] = "Stock / Availability"
+            diagnosis["reason_bucket"] = "Stock Issue"
+            diagnosis["issue"] = "Stock Availability Risk"
+            diagnosis["auto_tasks"].append(f"Restock inventory — current level at {stock:.0f}%")
+    
+    if "roas" in columns_lower:
+        roas = pd.to_numeric(df["roas"], errors='coerce').mean()
+        evidence.append(f"ROAS: {roas:.1f}x")
+        if roas < 2: diagnosis["auto_tasks"].append("Pause low-ROAS keywords and review ad targeting")
+    
+    diagnosis["confirmed_evidence"] = evidence if evidence else ["Data uploaded but no critical signals detected yet."]
+    
+    missing = []
+    if not has_sales: missing.append("Sales Report (orders, revenue) — to confirm revenue impact")
+    if not has_funnel: missing.append("Funnel Report (add_to_cart, checkout_initiated) — to find conversion leaks")
+    if not has_payment: missing.append("Payment Report (payment_success_rate) — to check gateway health")
+    if not has_ads: missing.append("Ads Report (spend, roas) — to check marketing efficiency")
+    if not has_stock: missing.append("Stock Report (in_stock_pct) — to check availability")
+    if not has_competitor: missing.append("Competitor Pricing Report — to detect competitive pressure")
+    
+    if missing:
+        diagnosis["missing_data_prompt"] = missing
+        diagnosis["confidence"] = "Low" if len(missing) > 3 else "Medium"
+    else:
+        diagnosis["confidence"] = "High"
+        diagnosis["missing_data_prompt"] = ["All key data sources uploaded. Full diagnosis available."]
+    
+    diagnosis["confidence_upgrade_path"] = [
+        {"current":"Low","if_you_upload":"Sales Report","upgrades_to":"Medium","reason":"Revenue impact can be confirmed"},
+        {"current":"Medium","if_you_upload":"Funnel + Payment Report","upgrades_to":"High","reason":"Leak stage and reason can be precisely identified"}
+    ]
+    
+    if not diagnosis["auto_tasks"]:
+        diagnosis["auto_tasks"] = ["Upload sales data to confirm revenue impact","Upload funnel data to identify conversion leaks","Check competitor pricing in your category"]
+    
+    return {"filename":file.filename,"rows":len(df),"report_type":detection["detected_type"],"diagnosis":diagnosis}
+
+@app.get("/api/demo/diagnosis")
+async def demo_diagnosis():
+    return {
+        "issue":"Sales Drop","leak_stage":"Payment","reason_bucket":"Payment Gateway Issue","confidence":"High",
+        "confirmed_evidence":["Payment success rate dropped from 82% to 51% in last 7 days","Rank dropped from #3 to #9 in HSR Layout for 'biscuits'","Competitor discount increased from 5% to 18%"],
+        "likely_cause":"UPI/Razorpay failure spike combined with competitor offer pressure",
+        "what_to_check_first":["Razorpay UPI failure logs for last 48 hours","COD availability for top 5 pincodes","Competitor pricing gap vs your discount"],
+        "recommended_action":"Fix gateway issue before increasing ad spend. Check UPI success rates and consider backup provider.",
+        "review_date":(datetime.now()+timedelta(days=3)).strftime("%B %d, %Y"),
+        "success_signal":"Payment success rate returns above 75%",
+        "missing_data_prompt":["Sales Report — to confirm revenue impact","Ads Report — to check if paid visibility changed"],
+        "confidence_upgrade_path":[{"current":"Medium","if_you_upload":"Sales Report","upgrades_to":"High","reason":"Revenue impact can be precisely calculated"}],
+        "auto_tasks":["Check Razorpay UPI failure logs","Compare competitor discount gap","Verify stock in HSR Layout","Check delivery charge impact on cart abandonment","Review rank after 3 days"]
+    }
+
 @app.post("/api/diagnose/upload")
 async def diagnose_upload(file:UploadFile=File(...)):
     content=await file.read()
@@ -322,115 +451,6 @@ async def chat(request:ChatRequest):
         h = high[0]
         return {"answer":f"🚨 {len(high)} high-priority issues. Top: {h['issue']} — {h['confirmed_evidence']} Likely cause: {h['likely_cause']} Review by: {h['review_date']}."}
     return {"answer":"I'm Lilly! No critical leaks detected. Check the Alerts tab for details."}
-@app.post("/api/chat")
-async def chat(request:ChatRequest):
-    a = generate_alerts()
-    high = [x for x in a if x['priority']=='High']
-    if high:
-        h = high[0]
-        return {"answer":f"🚨 {len(high)} high-priority issues. Top: {h['issue']} — {h['confirmed_evidence']} Likely cause: {h['likely_cause']} Review by: {h['review_date']}."}
-    return {"answer":"I'm Lilly! No critical leaks detected. Check the Alerts tab for details."}
-
-# ============================================================================
-# v12.0 — DATA UPLOAD MAPPING LAYER
-# ============================================================================
-
-REPORT_TEMPLATES = {
-    "sales": {
-        "required": ["orders", "revenue", "date"],
-        "optional": ["product_name", "brand", "category", "platform", "city", "quantity", "avg_order_value", "returns", "cancellations"],
-        "label": "Sales Report"
-    },
-    "ads": {
-        "required": ["spend", "impressions", "clicks"],
-        "optional": ["ctr", "cpc", "cpa", "roas", "conversion_rate", "campaign_name", "keyword", "audience", "platform"],
-        "label": "Ads / Marketing Report"
-    },
-    "stock": {
-        "required": ["product_name", "stock_quantity", "date"],
-        "optional": ["warehouse", "city", "pincode", "in_stock_pct", "reorder_level", "days_of_cover", "listing_status"],
-        "label": "Inventory / Stock Report"
-    },
-    "funnel": {
-        "required": ["sessions", "product_views", "add_to_cart", "checkout_initiated", "orders"],
-        "optional": ["payment_attempted", "payment_successful", "bounce_rate", "device", "traffic_source", "landing_page"],
-        "label": "Funnel / Conversion Report"
-    },
-    "payment": {
-        "required": ["payment_attempted", "payment_successful", "date"],
-        "optional": ["payment_failure_rate", "upi_success", "card_success", "cod_usage", "razorpay_drop", "payment_method", "gateway"],
-        "label": "Payment / Gateway Report"
-    },
-    "competitor_pricing": {
-        "required": ["competitor_name", "product_name", "competitor_price", "date"],
-        "optional": ["our_price", "competitor_discount", "competitor_rank", "platform", "city"],
-        "label": "Competitor Pricing Report"
-    }
-}
-
-def detect_report_type(columns):
-    columns_lower = [c.lower().strip() for c in columns]
-    scores = {}
-    for report_type, template in REPORT_TEMPLATES.items():
-        required = template["required"]
-        optional = template["optional"]
-        matched_required = [c for c in required if c in columns_lower]
-        matched_optional = [c for c in optional if c in columns_lower]
-        total_matched = len(matched_required) + len(matched_optional)
-        score = (len(matched_required) / len(required) * 60) + (len(matched_optional) / len(optional) * 40) if required else 0
-        scores[report_type] = {
-            "label": template["label"],
-            "score": round(score, 1),
-            "matched_required": matched_required,
-            "matched_optional": matched_optional,
-            "missing_required": [c for c in required if c not in columns_lower],
-            "missing_optional": [c for c in optional if c not in columns_lower],
-            "total_columns_expected": len(required) + len(optional),
-            "total_columns_matched": total_matched
-        }
-    best = max(scores.items(), key=lambda x: x[1]["score"]) if scores else (None, {"score": 0})
-    return {"detected_type": best[0], "details": best[1], "all_scores": {k: v["score"] for k, v in scores.items()}}
-
-@app.post("/api/upload/map")
-async def upload_and_map(file: UploadFile = File(...)):
-    content = await file.read()
-    if file.filename.endswith('.csv'):
-        df = pd.read_csv(io.BytesIO(content))
-    elif file.filename.endswith(('.xlsx', '.xls')):
-        df = pd.read_excel(io.BytesIO(content))
-    else:
-        raise HTTPException(400, "Unsupported format. Upload CSV or Excel.")
-    if df.empty:
-        raise HTTPException(400, "File is empty.")
-    columns = list(df.columns)
-    detection = detect_report_type(columns)
-    confidence_boost = 0
-    if detection["detected_type"]:
-        score = detection["details"]["score"]
-        if score >= 80: confidence_boost = 0.3
-        elif score >= 50: confidence_boost = 0.15
-        else: confidence_boost = 0.05
-    return {
-        "filename": file.filename,
-        "rows": len(df),
-        "columns_found": columns,
-        "report_detection": {
-            "detected_type": detection["detected_type"],
-            "label": detection["details"].get("label", "Unknown"),
-            "match_score": detection["details"].get("score", 0),
-            "matched_columns": detection["details"].get("total_columns_matched", 0),
-            "expected_columns": detection["details"].get("total_columns_expected", 0)
-        },
-        "mapping": {
-            "matched_required": detection["details"].get("matched_required", []),
-            "matched_optional": detection["details"].get("matched_optional", []),
-            "missing_required": detection["details"].get("missing_required", []),
-            "missing_optional": detection["details"].get("missing_optional", []),
-        },
-        "confidence_upgrade": f"+{int(confidence_boost * 100)}% — Diagnosis confidence improved",
-        "next_steps": "Upload missing columns for a more precise diagnosis." if detection["details"].get("missing_required") else "All required columns present. Full diagnosis available.",
-        "all_type_scores": detection.get("all_scores", {})
-    }
 
 if __name__=="__main__":
     import uvicorn; uvicorn.run(app,host="0.0.0.0",port=8000)
