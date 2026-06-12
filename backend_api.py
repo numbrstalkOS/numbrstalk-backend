@@ -139,70 +139,76 @@ def ai_insights(category=None):
 # ============================================================================
 
 def generate_alerts(category=None):
-    """Rule engine: automatically generate alerts from data patterns."""
+    """Rule engine: generate diverse, actionable alerts from real data."""
     alerts = []
     changes = parse_changes(category)
     products = get_products(category)
     
-    # Rule 1: Rank drops ≥5 positions
+    # Alert 1: Critical rank drops (10+ positions)
     for drop in changes.get('rank_drops', []):
         try:
             old_r = int(drop.get('old_rank', 0))
             new_r = int(drop.get('new_rank', 0))
-            if new_r - old_r >= 5:
+            diff = new_r - old_r
+            if diff >= 10:
                 alerts.append({
                     "id": f"alt_{abs(hash(drop.get('product','')))%100000}",
                     "platform": drop.get('platform', 'Blinkit'),
                     "city": drop.get('location', 'Bangalore'),
                     "sku": drop.get('product', ''),
                     "category": drop.get('keyword', ''),
-                    "issue": "Ranking Dropped",
-                    "reason": f"Rank dropped from #{old_r} to #{new_r} ({new_r - old_r} positions lost)",
-                    "impact": "High" if new_r - old_r >= 10 else "Medium",
+                    "issue": "Critical Rank Drop",
+                    "reason": f"Rank crashed from #{old_r} to #{new_r} — lost {diff} positions. Possible competitor takeover or stock issue.",
+                    "impact": "High",
                     "detected_at": datetime.now().isoformat(),
-                    "recommended_action": "Check sales velocity, stock levels, competitor pricing, and ad visibility on this SKU",
+                    "recommended_action": f"1) Check if '{drop.get('product','')}' is in stock. 2) Compare price with top 3 competitors. 3) Check if a new competitor entered the category.",
                     "status": "Pending"
                 })
         except: pass
     
-    # Rule 2: Discount > 35% = competitor pressure
-    for p in products:
-        if p.get('discount', 0) > 35:
+    # Alert 2: Moderate rank drops (5-9 positions)
+    for drop in changes.get('rank_drops', []):
+        try:
+            old_r = int(drop.get('old_rank', 0))
+            new_r = int(drop.get('new_rank', 0))
+            diff = new_r - old_r
+            if 5 <= diff < 10:
+                alerts.append({
+                    "id": f"alt_{abs(hash(drop.get('product','')))%100000}",
+                    "platform": drop.get('platform', 'Blinkit'),
+                    "city": drop.get('location', 'Bangalore'),
+                    "sku": drop.get('product', ''),
+                    "category": drop.get('keyword', ''),
+                    "issue": "Rank Slipping",
+                    "reason": f"Rank slipped from #{old_r} to #{new_r} ({diff} positions). Trend may continue if unchecked.",
+                    "impact": "Medium",
+                    "detected_at": datetime.now().isoformat(),
+                    "recommended_action": f"Monitor '{drop.get('product','')}' for 48 hours. If rank drops further, review pricing and ad visibility.",
+                    "status": "Pending"
+                })
+                break  # Only one moderate alert
+        except: pass
+    
+    # Alert 3: Deep discounting (price war risk)
+    for p in products[:20]:
+        discount = p.get('discount', 0)
+        if discount > 40:
             alerts.append({
                 "id": f"alt_{abs(hash(p.get('name','')))%100000}",
                 "platform": p.get('platform', 'Blinkit'),
                 "city": p.get('city', 'Bangalore'),
                 "sku": p.get('name', ''),
                 "category": category or 'All',
-                "issue": "Deep Discount Alert",
-                "reason": f"Product at {p.get('discount', 0)}% discount — possible price war or margin risk",
-                "impact": "High" if p.get('discount', 0) > 50 else "Medium",
+                "issue": "Deep Discount Detected",
+                "reason": f"'{p.get('name','')}' is at {discount}% discount — margin erosion risk. Competitors may be forcing a price war.",
+                "impact": "High" if discount > 55 else "Medium",
                 "detected_at": datetime.now().isoformat(),
-                "recommended_action": "Run tactical discount, create bundle offer, avoid permanent MRP reduction",
+                "recommended_action": "Do NOT match the discount. Launch a value bundle or combo offer instead. Check if this is a competitor-driven drop or inventory clearance.",
                 "status": "Pending"
             })
             break
     
-    # Rule 3: Stock out
-    for p in products:
-        stock = str(p.get('stock_status', '')).lower()
-        if 'out' in stock:
-            alerts.append({
-                "id": f"alt_{abs(hash(p.get('name','')))%100000}",
-                "platform": p.get('platform', 'Blinkit'),
-                "city": p.get('city', 'Bangalore'),
-                "sku": p.get('name', ''),
-                "category": category or 'All',
-                "issue": "Stock Out",
-                "reason": "Product showing out of stock — lost sales and visibility",
-                "impact": "High",
-                "detected_at": datetime.now().isoformat(),
-                "recommended_action": "Restock SKU immediately, pause ads on low-stock items, notify platform manager",
-                "status": "Pending"
-            })
-            break
-    
-    # Rule 4: Product disappeared from top 30
+    # Alert 4: Product disappeared from rankings
     for d in changes.get('disappeared', [])[:3]:
         alerts.append({
             "id": f"alt_{abs(hash(d.get('product','')))%100000}",
@@ -210,15 +216,15 @@ def generate_alerts(category=None):
             "city": d.get('location', 'Bangalore'),
             "sku": d.get('product', ''),
             "category": d.get('keyword', ''),
-            "issue": "Visibility Lost",
-            "reason": "Product disappeared from top 30 rankings — check stock, pricing, and competitor entries",
+            "issue": "Product Disappeared",
+            "reason": f"'{d.get('product','')}' vanished from top 30 rankings. May be delisted, out of stock, or pushed out by competitors.",
             "impact": "High",
             "detected_at": datetime.now().isoformat(),
-            "recommended_action": "Check stock availability, listing quality, pricing vs competitors, and increase ad visibility",
+            "recommended_action": "1) Check stock status immediately. 2) Verify listing is active on the platform. 3) Check if competitors launched aggressive offers.",
             "status": "Pending"
         })
     
-    # Rule 5: New competitor entry
+    # Alert 5: New competitor threat
     for entry in changes.get('new_entries', [])[:2]:
         alerts.append({
             "id": f"alt_{abs(hash(entry.get('product','')))%100000}",
@@ -227,15 +233,36 @@ def generate_alerts(category=None):
             "sku": entry.get('product', ''),
             "category": entry.get('keyword', ''),
             "issue": "New Competitor Entry",
-            "reason": "A new product entered the top 30 in your category — monitor for competitive pressure",
+            "reason": f"'{entry.get('product','')}' just entered the top 30. New competition may affect your visibility and pricing.",
             "impact": "Medium",
             "detected_at": datetime.now().isoformat(),
-            "recommended_action": "Track the new entrant's pricing, discounts, and ranking over next 48 hours",
+            "recommended_action": "Track this new entrant's price, discount, and rank over the next 48 hours. Prepare a response if they gain traction.",
             "status": "Pending"
         })
     
-    return alerts[:30]
-
+    # Alert 6: Rank improvement (positive alert)
+    for imp in changes.get('rank_improvements', [])[:2]:
+        try:
+            old_r = int(imp.get('old_rank', 0))
+            new_r = int(imp.get('new_rank', 0))
+            if old_r - new_r >= 5:
+                alerts.append({
+                    "id": f"alt_{abs(hash(imp.get('product','')))%100000}",
+                    "platform": imp.get('platform', 'Blinkit'),
+                    "city": imp.get('location', 'Bangalore'),
+                    "sku": imp.get('product', ''),
+                    "category": imp.get('keyword', ''),
+                    "issue": "Rank Improving ✅",
+                    "reason": f"Rank improved from #{old_r} to #{new_r} (+{old_r - new_r} positions). Whatever you're doing is working.",
+                    "impact": "Low",
+                    "detected_at": datetime.now().isoformat(),
+                    "recommended_action": "Identify what drove this improvement (pricing? ads? stock?) and double down on it.",
+                    "status": "Pending"
+                })
+                break
+        except: pass
+    
+    return alerts[:25]
 # ============================================================================
 # API ENDPOINTS
 # ============================================================================
