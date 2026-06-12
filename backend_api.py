@@ -322,6 +322,115 @@ async def chat(request:ChatRequest):
         h = high[0]
         return {"answer":f"🚨 {len(high)} high-priority issues. Top: {h['issue']} — {h['confirmed_evidence']} Likely cause: {h['likely_cause']} Review by: {h['review_date']}."}
     return {"answer":"I'm Lilly! No critical leaks detected. Check the Alerts tab for details."}
+@app.post("/api/chat")
+async def chat(request:ChatRequest):
+    a = generate_alerts()
+    high = [x for x in a if x['priority']=='High']
+    if high:
+        h = high[0]
+        return {"answer":f"🚨 {len(high)} high-priority issues. Top: {h['issue']} — {h['confirmed_evidence']} Likely cause: {h['likely_cause']} Review by: {h['review_date']}."}
+    return {"answer":"I'm Lilly! No critical leaks detected. Check the Alerts tab for details."}
+
+# ============================================================================
+# v12.0 — DATA UPLOAD MAPPING LAYER
+# ============================================================================
+
+REPORT_TEMPLATES = {
+    "sales": {
+        "required": ["orders", "revenue", "date"],
+        "optional": ["product_name", "brand", "category", "platform", "city", "quantity", "avg_order_value", "returns", "cancellations"],
+        "label": "Sales Report"
+    },
+    "ads": {
+        "required": ["spend", "impressions", "clicks"],
+        "optional": ["ctr", "cpc", "cpa", "roas", "conversion_rate", "campaign_name", "keyword", "audience", "platform"],
+        "label": "Ads / Marketing Report"
+    },
+    "stock": {
+        "required": ["product_name", "stock_quantity", "date"],
+        "optional": ["warehouse", "city", "pincode", "in_stock_pct", "reorder_level", "days_of_cover", "listing_status"],
+        "label": "Inventory / Stock Report"
+    },
+    "funnel": {
+        "required": ["sessions", "product_views", "add_to_cart", "checkout_initiated", "orders"],
+        "optional": ["payment_attempted", "payment_successful", "bounce_rate", "device", "traffic_source", "landing_page"],
+        "label": "Funnel / Conversion Report"
+    },
+    "payment": {
+        "required": ["payment_attempted", "payment_successful", "date"],
+        "optional": ["payment_failure_rate", "upi_success", "card_success", "cod_usage", "razorpay_drop", "payment_method", "gateway"],
+        "label": "Payment / Gateway Report"
+    },
+    "competitor_pricing": {
+        "required": ["competitor_name", "product_name", "competitor_price", "date"],
+        "optional": ["our_price", "competitor_discount", "competitor_rank", "platform", "city"],
+        "label": "Competitor Pricing Report"
+    }
+}
+
+def detect_report_type(columns):
+    columns_lower = [c.lower().strip() for c in columns]
+    scores = {}
+    for report_type, template in REPORT_TEMPLATES.items():
+        required = template["required"]
+        optional = template["optional"]
+        matched_required = [c for c in required if c in columns_lower]
+        matched_optional = [c for c in optional if c in columns_lower]
+        total_matched = len(matched_required) + len(matched_optional)
+        score = (len(matched_required) / len(required) * 60) + (len(matched_optional) / len(optional) * 40) if required else 0
+        scores[report_type] = {
+            "label": template["label"],
+            "score": round(score, 1),
+            "matched_required": matched_required,
+            "matched_optional": matched_optional,
+            "missing_required": [c for c in required if c not in columns_lower],
+            "missing_optional": [c for c in optional if c not in columns_lower],
+            "total_columns_expected": len(required) + len(optional),
+            "total_columns_matched": total_matched
+        }
+    best = max(scores.items(), key=lambda x: x[1]["score"]) if scores else (None, {"score": 0})
+    return {"detected_type": best[0], "details": best[1], "all_scores": {k: v["score"] for k, v in scores.items()}}
+
+@app.post("/api/upload/map")
+async def upload_and_map(file: UploadFile = File(...)):
+    content = await file.read()
+    if file.filename.endswith('.csv'):
+        df = pd.read_csv(io.BytesIO(content))
+    elif file.filename.endswith(('.xlsx', '.xls')):
+        df = pd.read_excel(io.BytesIO(content))
+    else:
+        raise HTTPException(400, "Unsupported format. Upload CSV or Excel.")
+    if df.empty:
+        raise HTTPException(400, "File is empty.")
+    columns = list(df.columns)
+    detection = detect_report_type(columns)
+    confidence_boost = 0
+    if detection["detected_type"]:
+        score = detection["details"]["score"]
+        if score >= 80: confidence_boost = 0.3
+        elif score >= 50: confidence_boost = 0.15
+        else: confidence_boost = 0.05
+    return {
+        "filename": file.filename,
+        "rows": len(df),
+        "columns_found": columns,
+        "report_detection": {
+            "detected_type": detection["detected_type"],
+            "label": detection["details"].get("label", "Unknown"),
+            "match_score": detection["details"].get("score", 0),
+            "matched_columns": detection["details"].get("total_columns_matched", 0),
+            "expected_columns": detection["details"].get("total_columns_expected", 0)
+        },
+        "mapping": {
+            "matched_required": detection["details"].get("matched_required", []),
+            "matched_optional": detection["details"].get("matched_optional", []),
+            "missing_required": detection["details"].get("missing_required", []),
+            "missing_optional": detection["details"].get("missing_optional", []),
+        },
+        "confidence_upgrade": f"+{int(confidence_boost * 100)}% — Diagnosis confidence improved",
+        "next_steps": "Upload missing columns for a more precise diagnosis." if detection["details"].get("missing_required") else "All required columns present. Full diagnosis available.",
+        "all_type_scores": detection.get("all_scores", {})
+    }
 
 if __name__=="__main__":
     import uvicorn; uvicorn.run(app,host="0.0.0.0",port=8000)
