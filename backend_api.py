@@ -444,13 +444,17 @@ async def diagnose_upload(file:UploadFile=File(...)):
     return {"filename":file.filename,"rows":len(df),"leak_stage":"Analysis pending"}
 
 @app.post("/api/chat")
-async def chat(request:ChatRequest):
+async def chat(request: ChatRequest):
+    # Handle both question and message formats
+    user_text = request.question or getattr(request, 'message', None) or ""
+    if not user_text.strip():
+        return {"answer": "I'm Lilly! Ask me about your marketplace performance, competitor activity, or upload data for a full diagnosis."}
+    
     a = generate_alerts()
     high = [x for x in a if x['priority']=='High']
     if high:
         h = high[0]
-        return {"answer":f"🚨 {len(high)} high-priority issues. Top: {h['issue']} — {h['confirmed_evidence']} Likely cause: {h['likely_cause']} Review by: {h['review_date']}."}
-    return {"answer":"I'm Lilly! No critical leaks detected. Check the Alerts tab for details."}
-
+        return {"answer": f"🚨 {len(high)} high-priority issues. Top: {h['issue']} — {h['confirmed_evidence']} Likely cause: {h['likely_cause']} Review by: {h['review_date']}."}
+    return {"answer": f"I'm Lilly! Latest scan shows {len(a)} alerts. No critical issues detected. Check the Alerts tab for details."}
 if __name__=="__main__":
     import uvicorn; uvicorn.run(app,host="0.0.0.0",port=8000)
