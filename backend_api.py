@@ -82,13 +82,14 @@ def get_top_brands(limit=5, category=None):
         if category and str(r.get('category','')).strip().lower() != category.lower(): continue
         b = str(r.get('brand','')).strip()
         d = parse_discount(r.get('discount',''))
-        if b and d > 0 and len(b) > 3:  # Skip short/noise brand names
+        if b and d > 0 and len(b) > 2:
             bd[b].append(d)
     res = []
     for b, ds in bd.items():
-        if len(ds) >= 5:  # Only brands with 5+ products
+        if len(ds) >= 3:
             res.append({"brand":b,"avg_discount":round(sum(ds)/len(ds),1),"product_count":len(ds)})
-    res.sort(key=lambda x:x['avg_discount'], reverse=True)
+    # Sort by product_count first (established brands), then by discount
+    res.sort(key=lambda x:(x['product_count'], x['avg_discount']), reverse=True)
     return res[:limit] if res else [{"brand":"No data","avg_discount":0,"product_count":0}]
 
 def parse_changes(category=None):
