@@ -1,6 +1,7 @@
 """
 Numbrstalk.com - Diagnostic Intelligence Backend API v9.0
 Action Engine: Alerts + Action Desk + Rule Engine
+Live data from local JSON files (updated hourly by GitHub Actions)
 """
 from fastapi import FastAPI, HTTPException, Query, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,8 +16,18 @@ from collections import defaultdict
 
 DATA_DIR = Path("data")
 
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434/v1")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:3b")
+
 app = FastAPI(title="Numbrstalk API", version="9.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+try:
+    ai_client = OpenAI(base_url=OLLAMA_BASE_URL, api_key="ollama")
+    ai_available = True
+except:
+    ai_client = None
+    ai_available = False
 
 main_data, change_data, insight_data = [], [], []
 last_refresh = None
@@ -71,8 +82,12 @@ def get_top_brands(limit=5, category=None):
         if category and str(r.get('category','')).strip().lower() != category.lower(): continue
         b = str(r.get('brand','')).strip()
         d = parse_discount(r.get('discount',''))
-        if b and d > 0: bd[b].append(d)
-    res = [{"brand":b,"avg_discount":round(sum(ds)/len(ds),1),"product_count":len(ds)} for b,ds in bd.items()]
+        if b and d > 0 and len(b) > 2:  # Skip single-letter/short brands
+            bd[b].append(d)
+    res = []
+    for b, ds in bd.items():
+        if len(ds) >= 3:  # Only brands with 3+ products
+            res.append({"brand":b,"avg_discount":round(sum(ds)/len(ds),1),"product_count":len(ds)})
     res.sort(key=lambda x:x['avg_discount'], reverse=True)
     return res[:limit] if res else [{"brand":"No data","avg_discount":0,"product_count":0}]
 
@@ -324,7 +339,7 @@ async def chat(request:ChatRequest):
     high = [x for x in a if x['impact']=='High']
     if high:
         return {"answer":f"🚨 {len(high)} high-priority alerts need attention. Top issue: {high[0]['issue']} — {high[0]['reason']}. Check the Alerts tab for details."}
-    return {"answer":f"I'm Lilly! Latest scan: {c['total_changes']:,} changes across {len(plats)} platforms. No critical alerts right now. Check the Alerts tab or upload a CSV for diagnosis."}
+    return {"answer":f"I'm Lilly! Latest scan: {c['total_changes']:,} changes across {len(plats)} platforms. No critical alerts right now."}
 
 if __name__=="__main__":
     import uvicorn; uvicorn.run(app,host="0.0.0.0",port=8000)
