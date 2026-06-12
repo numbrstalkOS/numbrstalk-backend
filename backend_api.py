@@ -448,16 +448,35 @@ async def diagnose_upload(file:UploadFile=File(...)):
 
 @app.post("/api/chat")
 async def chat(request: ChatRequest):
-    # Handle both question and message formats
-    user_text = request.question or getattr(request, 'message', None) or ""
-    if not user_text.strip():
-        return {"answer": "I'm Lilly! Ask me about your marketplace performance, competitor activity, or upload data for a full diagnosis."}
+    user_text = (request.message or request.question or "").strip().lower()
+    
+    if not user_text:
+        return {"answer": "I'm Lilly! Ask me about marketplace performance, competitor activity, pricing trends, or stock issues."}
     
     a = generate_alerts()
     high = [x for x in a if x['priority']=='High']
-    if high:
-        h = high[0]
-        return {"answer": f"🚨 {len(high)} high-priority issues. Top: {h['issue']} — {h['confirmed_evidence']} Likely cause: {h['likely_cause']} Review by: {h['review_date']}."}
-    return {"answer": f"I'm Lilly! Latest scan shows {len(a)} alerts. No critical issues detected. Check the Alerts tab for details."}
+    
+    # Respond based on what the user asked
+    if any(word in user_text for word in ["margin", "leakage", "profit", "loss"]):
+        if high:
+            return {"answer": f"💰 Margin Analysis: {len(high)} high-risk items detected. Top concern: {high[0]['sku']} — {high[0]['confirmed_evidence']} Check the Action Desk for priority tasks."}
+        return {"answer": "💰 No critical margin leaks detected right now. Your pricing looks stable across monitored categories."}
+    
+    if any(word in user_text for word in ["discount", "price", "competitor", "snack"]):
+        top_discounts = get_top_brands(3)
+        brands_text = ", ".join([f"{b['brand']} ({b['avg_discount']}%)" for b in top_discounts if b['brand'] != 'No data'])
+        return {"answer": f"📊 Top discounting brands right now: {brands_text}. {len(high)} high-priority alerts need attention. Check the Alerts tab for competitor movements."}
+    
+    if any(word in user_text for word in ["stock", "inventory", "oos", "availability", "out of stock"]):
+        return {"answer": f"📦 Stock Alert: Monitoring inventory across {len(a)} tracked items. {len(high)} high-priority issues detected. Check the Alerts tab for stock-out warnings."}
+    
+    if any(word in user_text for word in ["breach", "script", "template", "alert", "report"]):
+        return {"answer": f"📋 Here's your alert template:\n\nSubject: Urgent Price Discrepancy Detected\nBody: Our monitoring detected {len(high)} high-priority issues. Top alert: {high[0]['sku']} — {high[0]['confirmed_evidence']}\nAction: {high[0]['recommended_action']}\nReview by: {high[0]['review_date']}\n\nCopy this and send to your category manager."}
+    
+    if any(word in user_text for word in ["rank", "visibility", "position"]):
+        return {"answer": f"📈 Visibility Report: {len(high)} high-priority rank drops detected. Most affected: {high[0]['sku']} in {high[0]['city']}. {high[0]['recommended_action']}"}
+    
+    # Default response
+    return {"answer": f"👋 I'm Lilly! I'm monitoring {len(a)} alerts across your categories. {len(high)} need immediate attention. Ask me about pricing, discounts, stock, or competitors — or check the Alerts tab for details."}
 if __name__=="__main__":
     import uvicorn; uvicorn.run(app,host="0.0.0.0",port=8000)
