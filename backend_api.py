@@ -1,5 +1,6 @@
 """
-Numbrstalk.com - Diagnostic Intelligence Backend API v8.3
+Numbrstalk.com - Diagnostic Intelligence Backend API v9.0
+Action Engine: Alerts + Action Desk + Rule Engine
 """
 from fastapi import FastAPI, HTTPException, Query, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,7 +15,7 @@ from collections import defaultdict
 
 DATA_DIR = Path("data")
 
-app = FastAPI(title="Numbrstalk API", version="8.3.0")
+app = FastAPI(title="Numbrstalk API", version="9.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 main_data, change_data, insight_data = [], [], []
@@ -39,20 +40,17 @@ def refresh():
 refresh()
 
 def parse_discount(v):
-    """Parse discount from strings like '46% OFF', '15%', etc."""
-    try:
-        s = str(v).replace('% OFF','').replace('%','').replace('OFF','').strip()
-        return float(s)
-    except:
-        return 0
+    try: return float(str(v).replace('% OFF','').replace('%','').replace('OFF','').strip())
+    except: return 0
 
 def safe_float(v, default=0):
     try: return float(str(v).replace('%','').replace('₹','').replace(',','').strip())
     except: return default
 
-def get_products():
+def get_products(category=None):
+    data = [r for r in main_data if str(r.get('category','')).strip().lower() == str(category).lower()] if category else main_data
     prods = {}
-    for r in main_data:
+    for r in data:
         n = str(r.get('product_name','')).strip()
         if n and n not in prods:
             prods[n] = {
@@ -62,13 +60,15 @@ def get_products():
                 "price": safe_float(r.get('price')),
                 "discount": parse_discount(r.get('discount','')),
                 "platform": str(r.get('platform','')),
-                "city": str(r.get('city',''))
+                "city": str(r.get('city','')),
+                "stock_status": str(r.get('stock_status',''))
             }
     return list(prods.values())
 
-def get_top_brands(limit=5):
+def get_top_brands(limit=5, category=None):
     bd = defaultdict(list)
     for r in main_data:
+        if category and str(r.get('category','')).strip().lower() != category.lower(): continue
         b = str(r.get('brand','')).strip()
         d = parse_discount(r.get('discount',''))
         if b and d > 0: bd[b].append(d)
@@ -76,126 +76,231 @@ def get_top_brands(limit=5):
     res.sort(key=lambda x:x['avg_discount'], reverse=True)
     return res[:limit] if res else [{"brand":"No data","avg_discount":0,"product_count":0}]
 
-def parse_changes():
-    """Parse change_detection.json - has columns like issue_type, severity, old_rank, new_rank"""
-    result = {
-        "total_changes": len(change_data),
-        "change_types": [],
-        "keywords": [],
-        "locations": [],
-        "severity": {"Critical":0,"High":0,"Medium":0,"Low":0},
-        "rank_drops": [],
-        "rank_improvements": [],
-        "new_entries": [],
-        "disappeared": []
-    }
-    
-    # Count by type
-    type_counts = defaultdict(int)
-    kw_counts = defaultdict(int)
-    loc_counts = defaultdict(int)
-    
-    for row in change_data:
+def parse_changes(category=None):
+    data = change_data
+    if category: data = [r for r in data if str(r.get('keyword','')).strip().lower() == category.lower() or str(r.get('category','')).strip().lower() == category.lower()]
+    result = {"total_changes":len(data),"change_types":[],"keywords":[],"locations":[],"severity":{"Critical":0,"High":0,"Medium":0,"Low":0},"rank_drops":[],"rank_improvements":[],"new_entries":[],"disappeared":[],"platforms":[]}
+    tc, kc, lc, pc = defaultdict(int), defaultdict(int), defaultdict(int), defaultdict(int)
+    for row in data:
         issue = str(row.get('issue_type','')).strip()
-        severity = str(row.get('severity','')).strip()
-        keyword = str(row.get('keyword','')).strip()
-        location = str(row.get('location','')).strip()
-        product = str(row.get('product_name','')).strip()
-        old_rank = str(row.get('old_rank',''))
-        new_rank = str(row.get('new_rank',''))
-        
-        if issue: type_counts[issue] += 1
-        if keyword: kw_counts[keyword] += 1
-        if location: loc_counts[location] += 1
-        
-        # Severity
-        if severity in result['severity']:
-            result['severity'][severity] += 1
-        
-        # Rank drops
+        sev = str(row.get('severity','')).strip()
+        kw = str(row.get('keyword','')).strip()
+        loc = str(row.get('location','')).strip()
+        plat = str(row.get('platform','')).strip()
+        prod = str(row.get('product_name','')).strip()
+        old_r = str(row.get('old_rank',''))
+        new_r = str(row.get('new_rank',''))
+        if issue: tc[issue] += 1
+        if kw: kc[kw] += 1
+        if loc: lc[loc] += 1
+        if plat: pc[plat] += 1
+        if sev in result['severity']: result['severity'][sev] += 1
         try:
-            old = int(old_rank) if old_rank.isdigit() else 0
-            new = int(new_rank) if new_rank.isdigit() else 0
+            old = int(old_r) if old_r.replace('-','').isdigit() else 0
+            new = int(new_r) if new_r.replace('-','').isdigit() else 0
             if old > 0 and new > 0:
-                if new > old:
-                    result['rank_drops'].append({"product":product,"old_rank":old,"new_rank":new,"keyword":keyword,"location":location})
-                elif new < old:
-                    result['rank_improvements'].append({"product":product,"old_rank":old,"new_rank":new,"keyword":keyword,"location":location})
-        except:
-            pass
-        
-        # New entries (old_rank was 0 or empty)
-        if old_rank in ['0','','-'] and new_rank not in ['0','','-','?']:
-            result['new_entries'].append({"product":product,"new_rank":new_rank,"keyword":keyword,"location":location})
-        
-        # Disappeared
-        if new_rank in ['0','','-'] and old_rank not in ['0','','-','?']:
-            result['disappeared'].append({"product":product,"old_rank":old_rank,"keyword":keyword,"location":location})
-    
-    # Build change types
-    for t, c in sorted(type_counts.items(), key=lambda x:x[1], reverse=True)[:10]:
-        result['change_types'].append({"type":t,"count":c})
-    
-    for k, c in sorted(kw_counts.items(), key=lambda x:x[1], reverse=True)[:10]:
-        result['keywords'].append({"keyword":k,"changes":c})
-    
-    for l, c in sorted(loc_counts.items(), key=lambda x:x[1], reverse=True)[:10]:
-        result['locations'].append({"location":l,"changes":c})
-    
+                if new > old: result['rank_drops'].append({"product":prod,"old_rank":old,"new_rank":new,"keyword":kw,"location":loc,"platform":plat})
+                elif new < old: result['rank_improvements'].append({"product":prod,"old_rank":old,"new_rank":new,"keyword":kw,"location":loc,"platform":plat})
+        except: pass
+        if old_r in ['0','','-'] and new_r not in ['0','','-','?']: result['new_entries'].append({"product":prod,"new_rank":new_r,"keyword":kw,"location":loc,"platform":plat})
+        if new_r in ['0','','-'] and old_r not in ['0','','-','?']: result['disappeared'].append({"product":prod,"old_rank":old_r,"keyword":kw,"location":loc,"platform":plat})
+    for t,c in sorted(tc.items(),key=lambda x:x[1],reverse=True)[:10]: result['change_types'].append({"type":t,"count":c})
+    for k,c in sorted(kc.items(),key=lambda x:x[1],reverse=True)[:10]: result['keywords'].append({"keyword":k,"changes":c})
+    for l,c in sorted(lc.items(),key=lambda x:x[1],reverse=True)[:10]: result['locations'].append({"location":l,"changes":c})
+    for p,c in sorted(pc.items(),key=lambda x:x[1],reverse=True): result['platforms'].append({"platform":p,"changes":c})
     return result
 
-def ai_insights():
-    c = parse_changes()
-    if c['total_changes']==0:
-        return {"headline":"📭 No changes detected","summary":"Run GitHub Action to fetch sheet data.","key_metrics":{"total_changes":0,"critical_alerts":0,"top_location":"N/A","main_risk":"N/A"},"critical_issues":[],"actions":[{"priority":"High","action":"Run fetch-sheets GitHub Action"}]}
+def ai_insights(category=None):
+    c = parse_changes(category)
+    if c['total_changes']==0: return {"headline":"📭 No changes detected","summary":"No data for this category.","key_metrics":{"total_changes":0,"critical_alerts":0,"top_location":"N/A","main_risk":"N/A"},"critical_issues":[],"actions":[]}
     tl = c['locations'][0] if c['locations'] else {'location':'N/A','changes':0}
     tk = c['keywords'][0] if c['keywords'] else {'keyword':'N/A','changes':0}
     mc = c['change_types'][0] if c['change_types'] else {'type':'N/A','count':0}
-    return {
-        "headline":f"📊 {c['total_changes']:,} changes — {mc['type']} dominant",
-        "summary":f"{c['total_changes']:,} changes. {tl['location']} leads. '{tk['keyword']}' most volatile.",
-        "key_metrics":{"total_changes":c['total_changes'],"critical_alerts":c['severity']['Critical'],"top_location":tl['location'],"main_risk":mc['type']},
-        "critical_issues":[f"{mc['type']}: {mc['count']}",f"{tl['location']}: {tl['changes']}",f"'{tk['keyword']}': {tk['changes']}"],
-        "actions":[{"priority":"High","action":f"Audit {tl['location']}"},{"priority":"Medium","action":f"Review '{tk['keyword']}'"}]
-    }
+    return {"headline":f"📊 {c['total_changes']:,} changes — {mc['type']} dominant","summary":f"{c['total_changes']:,} changes. {tl['location']} leads. '{tk['keyword']}' most volatile.","key_metrics":{"total_changes":c['total_changes'],"critical_alerts":c['severity']['Critical'],"top_location":tl['location'],"main_risk":mc['type']},"critical_issues":[f"{mc['type']}: {mc['count']}",f"{tl['location']}: {tl['changes']}",f"'{tk['keyword']}': {tk['changes']}"],"actions":[{"priority":"High","action":f"Audit {tl['location']}"},{"priority":"Medium","action":f"Review '{tk['keyword']}'"}]}
+
+# ============================================================================
+# ACTION ENGINE — Alerts + Rules + Action Desk
+# ============================================================================
+
+def generate_alerts(category=None):
+    """Rule engine: automatically generate alerts from data patterns."""
+    alerts = []
+    changes = parse_changes(category)
+    products = get_products(category)
+    
+    # Rule 1: Rank drops ≥5 positions
+    for drop in changes.get('rank_drops', []):
+        try:
+            old_r = int(drop.get('old_rank', 0))
+            new_r = int(drop.get('new_rank', 0))
+            if new_r - old_r >= 5:
+                alerts.append({
+                    "id": f"alt_{abs(hash(drop.get('product','')))%100000}",
+                    "platform": drop.get('platform', 'Blinkit'),
+                    "city": drop.get('location', 'Bangalore'),
+                    "sku": drop.get('product', ''),
+                    "category": drop.get('keyword', ''),
+                    "issue": "Ranking Dropped",
+                    "reason": f"Rank dropped from #{old_r} to #{new_r} ({new_r - old_r} positions lost)",
+                    "impact": "High" if new_r - old_r >= 10 else "Medium",
+                    "detected_at": datetime.now().isoformat(),
+                    "recommended_action": "Check sales velocity, stock levels, competitor pricing, and ad visibility on this SKU",
+                    "status": "Pending"
+                })
+        except: pass
+    
+    # Rule 2: Discount > 35% = competitor pressure
+    for p in products:
+        if p.get('discount', 0) > 35:
+            alerts.append({
+                "id": f"alt_{abs(hash(p.get('name','')))%100000}",
+                "platform": p.get('platform', 'Blinkit'),
+                "city": p.get('city', 'Bangalore'),
+                "sku": p.get('name', ''),
+                "category": category or 'All',
+                "issue": "Deep Discount Alert",
+                "reason": f"Product at {p.get('discount', 0)}% discount — possible price war or margin risk",
+                "impact": "High" if p.get('discount', 0) > 50 else "Medium",
+                "detected_at": datetime.now().isoformat(),
+                "recommended_action": "Run tactical discount, create bundle offer, avoid permanent MRP reduction",
+                "status": "Pending"
+            })
+            break
+    
+    # Rule 3: Stock out
+    for p in products:
+        stock = str(p.get('stock_status', '')).lower()
+        if 'out' in stock:
+            alerts.append({
+                "id": f"alt_{abs(hash(p.get('name','')))%100000}",
+                "platform": p.get('platform', 'Blinkit'),
+                "city": p.get('city', 'Bangalore'),
+                "sku": p.get('name', ''),
+                "category": category or 'All',
+                "issue": "Stock Out",
+                "reason": "Product showing out of stock — lost sales and visibility",
+                "impact": "High",
+                "detected_at": datetime.now().isoformat(),
+                "recommended_action": "Restock SKU immediately, pause ads on low-stock items, notify platform manager",
+                "status": "Pending"
+            })
+            break
+    
+    # Rule 4: Product disappeared from top 30
+    for d in changes.get('disappeared', [])[:3]:
+        alerts.append({
+            "id": f"alt_{abs(hash(d.get('product','')))%100000}",
+            "platform": d.get('platform', 'Blinkit'),
+            "city": d.get('location', 'Bangalore'),
+            "sku": d.get('product', ''),
+            "category": d.get('keyword', ''),
+            "issue": "Visibility Lost",
+            "reason": "Product disappeared from top 30 rankings — check stock, pricing, and competitor entries",
+            "impact": "High",
+            "detected_at": datetime.now().isoformat(),
+            "recommended_action": "Check stock availability, listing quality, pricing vs competitors, and increase ad visibility",
+            "status": "Pending"
+        })
+    
+    # Rule 5: New competitor entry
+    for entry in changes.get('new_entries', [])[:2]:
+        alerts.append({
+            "id": f"alt_{abs(hash(entry.get('product','')))%100000}",
+            "platform": entry.get('platform', 'Blinkit'),
+            "city": entry.get('location', 'Bangalore'),
+            "sku": entry.get('product', ''),
+            "category": entry.get('keyword', ''),
+            "issue": "New Competitor Entry",
+            "reason": "A new product entered the top 30 in your category — monitor for competitive pressure",
+            "impact": "Medium",
+            "detected_at": datetime.now().isoformat(),
+            "recommended_action": "Track the new entrant's pricing, discounts, and ranking over next 48 hours",
+            "status": "Pending"
+        })
+    
+    return alerts[:30]
+
+# ============================================================================
+# API ENDPOINTS
+# ============================================================================
 
 @app.get("/api/health")
 async def health():
-    return {"status":"ok","version":"8.3","data_rows":len(main_data),"change_rows":len(change_data)}
+    return {"status":"ok","version":"9.0","data_rows":len(main_data),"change_rows":len(change_data)}
 
 @app.get("/api/categories")
 async def categories():
     cats = sorted(set(str(r.get('category','')).strip() for r in main_data if str(r.get('category','')).strip()))
-    brands = sorted(set(str(r.get('brand','')).strip() for r in main_data if str(r.get('brand','')).strip()))
-    return {"categories":cats,"brands":brands}
+    return {"categories":cats}
 
 @app.get("/api/dashboard")
-async def dashboard():
-    return {"totalProducts":len(get_products()),"lastUpdated":str(last_refresh)}
+async def dashboard(category: Optional[str] = None):
+    prods = get_products(category)
+    return {"totalProducts":len(prods),"platforms":list(set(p['platform'] for p in prods)),"lastUpdated":str(last_refresh)}
 
 @app.get("/api/products")
-async def products():
-    return {"products":get_products()[:100],"count":len(get_products())}
+async def products(category: Optional[str] = None):
+    prods = get_products(category)
+    return {"products":prods[:100],"count":len(prods)}
 
 @app.get("/api/changes")
-async def changes():
-    return parse_changes()
+async def changes(category: Optional[str] = None):
+    return parse_changes(category)
 
 @app.get("/api/insights/ai")
-async def insights_ai():
-    return ai_insights()
+async def insights_ai(category: Optional[str] = None):
+    return ai_insights(category)
 
 @app.get("/api/top-brands")
-async def top_brands(limit:int=5):
-    return {"brands":get_top_brands(limit)}
+async def top_brands(limit:int=5, category: Optional[str] = None):
+    return {"brands":get_top_brands(limit, category)}
+
+@app.get("/api/alerts")
+async def alerts(category: Optional[str] = None):
+    a = generate_alerts(category)
+    return {"alerts":a,"count":len(a)}
+
+@app.post("/api/alerts/{alert_id}/status")
+async def update_alert_status(alert_id: str, status: str = Query(..., pattern="^(Pending|In Progress|Done|Ignored)$")):
+    return {"alert_id":alert_id,"status":status,"updated":True}
+
+@app.get("/api/actions/summary")
+async def action_summary(category: Optional[str] = None):
+    a = generate_alerts(category)
+    high = [x for x in a if x['impact']=='High']
+    return {"total_alerts":len(a),"high_priority":len(high),"top_3_actions":[x['recommended_action'] for x in high[:3]],"summary":f"{len(high)} high-priority actions need attention. Top issue: {high[0]['issue'] if high else 'None'}","alerts":a[:15]}
 
 @app.get("/api/reports/generate")
-async def report():
+async def report(category: Optional[str] = None):
     output=io.StringIO(); w=csv.writer(output)
     w.writerow(["Product","Brand","Price","Discount","Platform","City"])
-    for p in get_products()[:500]: w.writerow([p['name'],p['brand'],p['price'],p['discount'],p['platform'],p['city']])
+    for p in get_products(category)[:500]: w.writerow([p['name'],p['brand'],p['price'],p['discount'],p['platform'],p['city']])
     output.seek(0)
     return StreamingResponse(output,media_type="text/csv",headers={"Content-Disposition":"attachment; filename=report.csv"})
+
+@app.get("/api/report/category")
+async def category_report(category: str):
+    prods = [r for r in main_data if category.lower() in str(r.get('keyword','')).lower() or category.lower() in str(r.get('category','')).lower()]
+    brands = defaultdict(lambda: {"count":0,"prices":[],"discounts":[]})
+    prices, discounts, platforms = [], [], set()
+    for p in prods:
+        b = str(p.get('brand',''))
+        brands[b]["count"] += 1
+        pr = safe_float(p.get('price'))
+        d = parse_discount(p.get('discount',''))
+        if pr>0: brands[b]["prices"].append(pr); prices.append(pr)
+        if d>0: brands[b]["discounts"].append(d); discounts.append(d)
+        if p.get('platform'): platforms.add(str(p['platform']))
+    top = sorted(brands.items(),key=lambda x:x[1]["count"],reverse=True)[:10]
+    tb = [{"brand":n,"products":d["count"],"avg_price":round(sum(d["prices"])/len(d["prices"]),1) if d["prices"] else 0,"avg_discount":round(sum(d["discounts"])/len(d["discounts"]),1) if d["discounts"] else 0} for n,d in top]
+    pranges = {"Under ₹50":0,"₹50-100":0,"₹100-200":0,"₹200+":0}
+    for p in prices:
+        if p<50: pranges["Under ₹50"]+=1
+        elif p<100: pranges["₹50-100"]+=1
+        elif p<200: pranges["₹100-200"]+=1
+        else: pranges["₹200+"]+=1
+    hd = [{"name":str(p.get('product_name',''))[:50],"brand":str(p.get('brand','')),"discount":parse_discount(p.get('discount',''))} for p in prods if parse_discount(p.get('discount',''))>30][:5]
+    return {"category":category,"total_products":len(prods),"total_brands":len(brands),"avg_price":round(sum(prices)/len(prices),1) if prices else 0,"min_price":min(prices) if prices else 0,"max_price":max(prices) if prices else 0,"avg_discount":round(sum(discounts)/len(discounts),1) if discounts else 0,"platforms":list(platforms),"top_brands":tb,"price_ranges":pranges,"high_discount_products":hd}
 
 @app.get("/api/template/download")
 async def template():
@@ -214,83 +319,12 @@ async def diagnose_upload(file:UploadFile=File(...)):
 @app.post("/api/chat")
 async def chat(request:ChatRequest):
     c = parse_changes()
-    if c['total_changes']>0:
-        return {"answer":f"Latest scan: {c['total_changes']:,} changes across {len(c['locations'])} locations. Top issue: {c['change_types'][0]['type'] if c['change_types'] else 'N/A'}. Check AI Insights tab for details."}
-    return {"answer":"I'm Lilly! No recent scan data yet. Check the AI Insights tab or upload a CSV for diagnosis."}
-@app.get("/api/report/category")
-async def category_report(category: str):
-    """Generate a category intelligence report."""
-    # Fetch products for this category
-    products = []
-    for r in main_data:
-        if category.lower() in str(r.get('keyword', '')).lower() or category.lower() in str(r.get('category', '')).lower():
-            products.append({
-                "name": str(r.get('product_name', '')),
-                "brand": str(r.get('brand', '')),
-                "price": safe_float(r.get('price')),
-                "discount": parse_discount(r.get('discount', '')),
-                "platform": str(r.get('platform', '')),
-                "city": str(r.get('city', ''))
-            })
-    
-    if not products:
-        return {"error": f"No data found for '{category}'. Try: coconut water, biscuits, chips, lipstick, bread, milk"}
-    
-    # Analyze
-    brands = defaultdict(lambda: {"count": 0, "prices": [], "discounts": []})
-    prices = []
-    discounts = []
-    platforms = set()
-    
-    for p in products:
-        b = p['brand']
-        brands[b]["count"] += 1
-        if p['price'] > 0:
-            brands[b]["prices"].append(p['price'])
-            prices.append(p['price'])
-        if p['discount'] > 0:
-            brands[b]["discounts"].append(p['discount'])
-            discounts.append(p['discount'])
-        if p['platform']: platforms.add(p['platform'])
-    
-    # Top brands
-    top_brands = sorted(brands.items(), key=lambda x: x[1]["count"], reverse=True)[:10]
-    top_brands_list = []
-    for name, data in top_brands:
-        avg_price = round(sum(data["prices"]) / len(data["prices"]), 1) if data["prices"] else 0
-        avg_discount = round(sum(data["discounts"]) / len(data["discounts"]), 1) if data["discounts"] else 0
-        top_brands_list.append({
-            "brand": name,
-            "products": data["count"],
-            "avg_price": avg_price,
-            "avg_discount": avg_discount
-        })
-    
-    # Price ranges
-    price_ranges = {"Under ₹50": 0, "₹50-100": 0, "₹100-200": 0, "₹200+": 0}
-    for p in prices:
-        if p < 50: price_ranges["Under ₹50"] += 1
-        elif p < 100: price_ranges["₹50-100"] += 1
-        elif p < 200: price_ranges["₹100-200"] += 1
-        else: price_ranges["₹200+"] += 1
-    
-    # High discount products
-    high_discount = [p for p in products if p['discount'] > 30][:5]
-    
-    return {
-        "category": category,
-        "total_products": len(products),
-        "total_brands": len(brands),
-        "avg_price": round(sum(prices)/len(prices), 1) if prices else 0,
-        "min_price": min(prices) if prices else 0,
-        "max_price": max(prices) if prices else 0,
-        "avg_discount": round(sum(discounts)/len(discounts), 1) if discounts else 0,
-        "discounting_products": len(discounts),
-        "platforms": list(platforms),
-        "top_brands": top_brands_list,
-        "price_ranges": price_ranges,
-        "high_discount_products": [{"name": p['name'][:50], "brand": p['brand'], "discount": p['discount']} for p in high_discount],
-        "sample_products": products[:20]
-    }
+    plats = list(set(str(r.get('platform','')).strip() for r in change_data if r.get('platform')))
+    a = generate_alerts()
+    high = [x for x in a if x['impact']=='High']
+    if high:
+        return {"answer":f"🚨 {len(high)} high-priority alerts need attention. Top issue: {high[0]['issue']} — {high[0]['reason']}. Check the Alerts tab for details."}
+    return {"answer":f"I'm Lilly! Latest scan: {c['total_changes']:,} changes across {len(plats)} platforms. No critical alerts right now. Check the Alerts tab or upload a CSV for diagnosis."}
+
 if __name__=="__main__":
     import uvicorn; uvicorn.run(app,host="0.0.0.0",port=8000)
