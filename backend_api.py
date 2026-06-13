@@ -1,6 +1,7 @@
 """
-Numbrstalk.com - Commerce Diagnosis Engine v13.0
-Complete Diagnosis Result + Missing Data + Confidence Upgrade + Auto-Tasks + Demo
+Numbrstalk.com - Commerce Diagnosis Engine v14.0
+Data Trust & Demo Polish: Clean brands, actionable alerts, business language
++ Confidence Upgrade, Data Readiness, Context-Aware Wording
 """
 from fastapi import FastAPI, HTTPException, Query, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,8 +16,14 @@ from collections import defaultdict
 
 DATA_DIR = Path("data")
 
-app = FastAPI(title="Numbrstalk Diagnosis Engine", version="13.0.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app = FastAPI(title="Numbrstalk Diagnosis Engine", version="14.0.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 main_data, change_data, insight_data = [], [], []
 last_refresh = None
@@ -28,7 +35,8 @@ class ChatRequest(BaseModel):
     history: Optional[list] = None
 
 def load_json(fp):
-    if not fp.exists(): return []
+    if not fp.exists():
+        return []
     with open(fp, "r", encoding="utf-8") as f:
         data = json.load(f)
     return data if isinstance(data, list) else []
@@ -42,197 +50,585 @@ def refresh():
 
 refresh()
 
+# ============================================================================
+# BRAND NORMALIZATION LAYER (Improvement 1)
+# ============================================================================
+
+BRAND_CORRECTIONS = {
+    "the": "The Baker's Dozen",
+    "hide": "Hide & Seek",
+    "bisk": "Bisk Farm",
+    "open": "Open Secret",
+    "karachi bakery": "Karachi Bakery",
+    "britannia": "Britannia",
+    "sunfeast": "Sunfeast",
+    "parle": "Parle",
+    "malkist": "Malkist",
+    "oreo": "Oreo",
+    "cadbury": "Cadbury",
+    "nestle": "Nestlé",
+    "tata": "Tata",
+    "amul": "Amul",
+    "mother dairy": "Mother Dairy",
+    "dabur": "Dabur",
+    "himalaya": "Himalaya",
+    "lakme": "Lakmé",
+    "maybelline": "Maybelline",
+    "loreal": "L'Oréal",
+    "nykaa": "Nykaa",
+    "ponds": "Pond's",
+    "nivea": "Nivea",
+    "dove": "Dove",
+    "my": "",
+    "out": "",
+    "add": "",
+    "view": "",
+    "login": "",
+    "search": "",
+}
+
+FAKE_PRODUCTS = [
+    "my cart", "out of stock", "add to cart", "view cart",
+    "login", "search", "checkout", "buy now", "wishlist",
+    "account", "sign in", "register", "forgot password",
+    "delivery", "payment",
+]
+
+def normalize_brand(brand_name: str) -> str:
+    """Clean and normalize brand names."""
+    if not brand_name:
+        return "Unknown"
+
+    brand_lower = brand_name.strip().lower()
+
+    # Exact match first
+    if brand_lower in BRAND_CORRECTIONS:
+        corrected = BRAND_CORRECTIONS[brand_lower]
+        return corrected if corrected else "Unknown"
+
+    # Partial matches
+    for key, value in BRAND_CORRECTIONS.items():
+        if key in brand_lower and key != brand_lower and len(brand_name) < 20:
+            return value if value else "Unknown"
+
+    return brand_name.strip()
+
+
+def is_fake_product(product_name: str) -> bool:
+    """Filter out UI text scraped as products."""
+    if not product_name:
+        return True
+
+    name_lower = product_name.strip().lower()
+
+    if any(fake in name_lower for fake in FAKE_PRODUCTS):
+        return True
+
+    if len(name_lower) < 3 or name_lower.isdigit():
+        return True
+
+    return False
+
+
 def parse_discount(v):
-    try: return float(str(v).replace('% OFF','').replace('%','').replace('OFF','').strip())
-    except: return 0
+    try:
+        return float(
+            str(v)
+            .replace("% OFF", "")
+            .replace("%", "")
+            .replace("OFF", "")
+            .strip()
+        )
+    except:
+        return 0
+
 
 def safe_float(v, default=0):
-    try: return float(str(v).replace('%','').replace('₹','').replace(',','').strip())
-    except: return default
+    try:
+        return float(
+            str(v).replace("%", "").replace("₹", "").replace(",", "").strip()
+        )
+    except:
+        return default
+
+
+# ============================================================================
+# BUSINESS LANGUAGE MAP (Improvement 4)
+# ============================================================================
+
+BUSINESS_LANGUAGE = {
+    "Promo Over-intensity": "Heavy competitor discounting",
+    "Visibility Suppression": "Search visibility drop",
+    "Algorithm discount audit penalty": "Possible listing/discount eligibility issue",
+    "Margin Leak": "Profit margin pressure",
+    "Inventory Leak": "Stock availability gap",
+    "Search Rank Suppression": "Search ranking decline",
+    "Critical Rank Drop": "Significant rank decline",
+    "Rank Slipping": "Gradual rank decline",
+    "Product Disappeared": "Product removed from rankings",
+    "New Competitor Entry": "New competitor detected",
+    "Deep Discount Alert": "Heavy discounting detected",
+    "Stock Out": "Out of stock",
+    "Ranking Dropped": "Rank decline detected",
+    "Visibility Lost": "Lost search visibility",
+}
+
+
+def simplify_language(text: str) -> str:
+    """Replace technical terms with business-friendly language."""
+    for old, new in BUSINESS_LANGUAGE.items():
+        text = text.replace(old, new)
+    return text
+
+
+# ============================================================================
+# CATEGORY MAPPING (Improvement 6)
+# ============================================================================
+
+CATEGORY_MAPPING = {
+    "biscuit": "Biscuits",
+    "cookie": "Cookies",
+    "rusk": "Rusk",
+    "khari": "Khari",
+    "cracker": "Crackers",
+    "cream biscuit": "Cream Biscuits",
+    "healthy": "Healthy Snacks",
+    "bakery": "Bakery Snacks",
+    "bread": "Bread",
+    "cake": "Cake",
+    "toast": "Toast",
+    "snack": "Snacks",
+    "chip": "Chips & Namkeen",
+    "namkeen": "Chips & Namkeen",
+    "drink": "Drinks & Juices",
+    "juice": "Drinks & Juices",
+    "water": "Drinks & Juices",
+    "beauty": "Beauty & Cosmetics",
+    "cosmetic": "Beauty & Cosmetics",
+    "lipstick": "Beauty & Cosmetics",
+    "cream": "Beauty & Cosmetics",
+    "lotion": "Beauty & Cosmetics",
+    "makeup": "Beauty & Cosmetics",
+}
+
+
+def map_category(keyword: str) -> str:
+    """Map keywords to standard categories."""
+    kw = keyword.lower().strip()
+    for key, cat in CATEGORY_MAPPING.items():
+        if key in kw:
+            return cat
+    return "General"
+
+
+# ============================================================================
+# DATA READINESS & CONFIDENCE (Improvement 8)
+# ============================================================================
+
+READINESS_WEIGHTS = {
+    "price_sheet": 20,
+    "index_scrape": 15,
+    "ads_report": 20,
+    "cost_matrix": 10,
+    "inventory_feed": 15,
+    "competitor_pricing": 10,
+    "margin_sheet": 10,
+}
+
+
+def calculate_readiness(available_reports: list) -> dict:
+    """Calculate confidence score based on uploaded reports."""
+    score = 0
+    available = set(available_reports)
+    report_status = {}
+
+    for report, weight in READINESS_WEIGHTS.items():
+        if report in available:
+            score += weight
+            report_status[report] = {
+                "status": "uploaded",
+                "contribution": f"+{weight}%",
+            }
+        else:
+            report_status[report] = {
+                "status": "missing",
+                "contribution": f"+{weight}% potential",
+            }
+
+    level = "High" if score >= 80 else "Medium" if score >= 50 else "Low"
+
+    missing = [r for r in READINESS_WEIGHTS if r not in available]
+    next_best = (
+        max(missing, key=lambda r: READINESS_WEIGHTS[r]) if missing else None
+    )
+
+    return {
+        "confidence_score": score,
+        "confidence_level": level,
+        "report_status": report_status,
+        "missing_reports": missing,
+        "next_best_upload": next_best,
+    }
+
+
+def get_context_pronoun(has_uploaded: bool = False) -> dict:
+    """Return context-appropriate wording (Improvement: Your/Our fix)."""
+    if has_uploaded:
+        return {
+            "possessive": "Your",
+            "brand_label": "Your Brand",
+            "action_verb": "Your",
+        }
+    return {
+        "possessive": "Selected",
+        "brand_label": "Tracked Brand",
+        "action_verb": "The",
+    }
+
+
+# ============================================================================
+# RANK MOVEMENT FORMATTER (Improvement 2)
+# ============================================================================
+
+def format_rank_movement(old_rank, new_rank) -> str:
+    """Format rank change in human-readable form."""
+    try:
+        old = int(old_rank) if str(old_rank).replace("-", "").isdigit() else 0
+        new = int(new_rank) if str(new_rank).replace("-", "").isdigit() else 0
+
+        if old == 0 and new > 0:
+            return f"Entered at #{new}"
+        if old > 0 and new == 0:
+            return f"Dropped out from #{old}"
+        if old > 0 and new > 0:
+            diff = new - old
+            if diff > 0:
+                return f"#{old} → #{new}, dropped {diff} positions"
+            elif diff < 0:
+                return f"#{old} → #{new}, improved {abs(diff)} positions"
+            else:
+                return f"#{old} → #{new}, no change"
+        return f"{old_rank} → {new_rank}"
+    except:
+        return f"{old_rank} → {new_rank}"
+
+
+# ============================================================================
+# DATA HELPERS
+# ============================================================================
 
 def get_products(category=None):
-    data = [r for r in main_data if str(r.get('category','')).strip().lower() == str(category).lower()] if category else main_data
+    data = main_data
+    if category:
+        data = [
+            r
+            for r in main_data
+            if str(r.get("category", "")).strip().lower() == str(category).lower()
+        ]
+
     prods = {}
     for r in data:
-        n = str(r.get('product_name','')).strip()
+        n = str(r.get("product_name", "")).strip()
+        if is_fake_product(n):
+            continue
         if n and n not in prods:
-            prods[n] = {"id":str(abs(hash(n))%100000),"name":n,"brand":str(r.get('brand','')),"price":safe_float(r.get('price')),"discount":parse_discount(r.get('discount','')),"platform":str(r.get('platform','')),"city":str(r.get('city','')),"stock_status":str(r.get('stock_status',''))}
+            prods[n] = {
+                "id": str(abs(hash(n)) % 100000),
+                "name": n,
+                "brand": normalize_brand(str(r.get("brand", ""))),
+                "price": safe_float(r.get("price")),
+                "discount": parse_discount(r.get("discount", "")),
+                "platform": str(r.get("platform", "")),
+                "city": str(r.get("city", "")),
+                "category": map_category(str(r.get("keyword", ""))),
+                "stock_status": str(r.get("stock_status", "")),
+            }
     return list(prods.values())
+
 
 def get_top_brands(limit=5, category=None):
     bd = defaultdict(list)
     for r in main_data:
-        if category and str(r.get('category','')).strip().lower() != category.lower(): continue
-        b = str(r.get('brand','')).strip()
-        d = parse_discount(r.get('discount',''))
-        if b and d > 0 and len(b) > 2: bd[b].append(d)
-    res = [{"brand":b,"avg_discount":round(sum(ds)/len(ds),1),"product_count":len(ds)} for b,ds in bd.items() if len(ds)>=3]
-    res.sort(key=lambda x:(x['product_count'],x['avg_discount']), reverse=True)
-    return res[:limit] if res else [{"brand":"No data","avg_discount":0,"product_count":0}]
+        if category and str(r.get("category", "")).strip().lower() != category.lower():
+            continue
+        b = normalize_brand(str(r.get("brand", "")))
+        d = parse_discount(r.get("discount", ""))
+        if b and b != "Unknown" and d > 0 and len(b) > 2:
+            bd[b].append(d)
+
+    res = [
+        {
+            "brand": b,
+            "avg_discount": round(sum(ds) / len(ds), 1),
+            "product_count": len(ds),
+        }
+        for b, ds in bd.items()
+        if len(ds) >= 3
+    ]
+    res.sort(key=lambda x: (x["product_count"], x["avg_discount"]), reverse=True)
+    return (
+        res[:limit]
+        if res
+        else [{"brand": "No data", "avg_discount": 0, "product_count": 0}]
+    )
+
 
 def parse_changes(category=None):
     data = change_data
-    if category: data = [r for r in data if str(r.get('keyword','')).strip().lower() == category.lower()]
-    result = {"total_changes":len(data),"change_types":[],"keywords":[],"locations":[],"severity":{"Critical":0,"High":0,"Medium":0,"Low":0},"rank_drops":[],"rank_improvements":[],"new_entries":[],"disappeared":[],"platforms":[]}
-    tc,kc,lc = defaultdict(int),defaultdict(int),defaultdict(int)
+    if category:
+        data = [
+            r
+            for r in data
+            if str(r.get("keyword", "")).strip().lower() == category.lower()
+        ]
+
+    result = {
+        "total_changes": len(data),
+        "change_types": [],
+        "keywords": [],
+        "locations": [],
+        "severity": {"Critical": 0, "High": 0, "Medium": 0, "Low": 0},
+        "rank_drops": [],
+        "rank_improvements": [],
+        "new_entries": [],
+        "disappeared": [],
+        "platforms": [],
+    }
+
+    tc, kc, lc = defaultdict(int), defaultdict(int), defaultdict(int)
+
     for row in data:
-        issue=str(row.get('issue_type','')).strip(); sev=str(row.get('severity','')).strip()
-        kw=str(row.get('keyword','')).strip(); loc=str(row.get('location','')).strip()
-        plat=str(row.get('platform','')).strip(); prod=str(row.get('product_name','')).strip()
-        old_r=str(row.get('old_rank','')); new_r=str(row.get('new_rank',''))
-        if issue: tc[issue]+=1
-        if kw: kc[kw]+=1
-        if loc: lc[loc]+=1
-        if sev in result['severity']: result['severity'][sev]+=1
+        issue = str(row.get("issue_type", "")).strip()
+        sev = str(row.get("severity", "")).strip()
+        kw = str(row.get("keyword", "")).strip()
+        loc = str(row.get("location", "")).strip()
+        plat = str(row.get("platform", "")).strip()
+        prod = str(row.get("product_name", "")).strip()
+        old_r = str(row.get("old_rank", ""))
+        new_r = str(row.get("new_rank", ""))
+
+        if issue:
+            tc[issue] += 1
+        if kw:
+            kc[kw] += 1
+        if loc:
+            lc[loc] += 1
+        if sev in result["severity"]:
+            result["severity"][sev] += 1
+
         try:
-            old=int(old_r) if old_r.replace('-','').isdigit() else 0
-            new=int(new_r) if new_r.replace('-','').isdigit() else 0
-            if old>0 and new>0:
-                if new>old: result['rank_drops'].append({"product":prod,"old_rank":old,"new_rank":new,"keyword":kw,"location":loc,"platform":plat})
-                elif new<old: result['rank_improvements'].append({"product":prod,"old_rank":old,"new_rank":new,"keyword":kw,"location":loc,"platform":plat})
-        except: pass
-        if old_r in ['0','','-'] and new_r not in ['0','','-','?']: result['new_entries'].append({"product":prod,"new_rank":new_r,"keyword":kw,"location":loc,"platform":plat})
-        if new_r in ['0','','-'] and old_r not in ['0','','-','?']: result['disappeared'].append({"product":prod,"old_rank":old_r,"keyword":kw,"location":loc,"platform":plat})
-    for t,c in sorted(tc.items(),key=lambda x:x[1],reverse=True)[:10]: result['change_types'].append({"type":t,"count":c})
-    for k,c in sorted(kc.items(),key=lambda x:x[1],reverse=True)[:10]: result['keywords'].append({"keyword":k,"changes":c})
-    for l,c in sorted(lc.items(),key=lambda x:x[1],reverse=True)[:10]: result['locations'].append({"location":l,"changes":c})
+            old = int(old_r) if old_r.replace("-", "").isdigit() else 0
+            new = int(new_r) if new_r.replace("-", "").isdigit() else 0
+            movement = format_rank_movement(old_r, new_r)
+            if old > 0 and new > 0:
+                if new > old:
+                    result["rank_drops"].append(
+                        {
+                            "product": prod,
+                            "old_rank": old,
+                            "new_rank": new,
+                            "movement": movement,
+                            "keyword": kw,
+                            "location": loc,
+                            "platform": plat,
+                        }
+                    )
+                elif new < old:
+                    result["rank_improvements"].append(
+                        {
+                            "product": prod,
+                            "old_rank": old,
+                            "new_rank": new,
+                            "movement": movement,
+                            "keyword": kw,
+                            "location": loc,
+                            "platform": plat,
+                        }
+                    )
+        except:
+            pass
+
+        if old_r in ["0", "", "-"] and new_r not in ["0", "", "-", "?"]:
+            result["new_entries"].append(
+                {
+                    "product": prod,
+                    "new_rank": new_r,
+                    "keyword": kw,
+                    "location": loc,
+                    "platform": plat,
+                }
+            )
+        if new_r in ["0", "", "-"] and old_r not in ["0", "", "-", "?"]:
+            result["disappeared"].append(
+                {
+                    "product": prod,
+                    "old_rank": old_r,
+                    "keyword": kw,
+                    "location": loc,
+                    "platform": plat,
+                }
+            )
+
+    # Top 10 change types
+    for t, c in sorted(tc.items(), key=lambda x: x[1], reverse=True)[:10]:
+        result["change_types"].append({"type": simplify_language(t), "count": c})
+
+    # Top 10 keywords
+    for k, c in sorted(kc.items(), key=lambda x: x[1], reverse=True)[:10]:
+        result["keywords"].append({"keyword": k, "changes": c})
+
+    # Top 10 locations
+    for l, c in sorted(lc.items(), key=lambda x: x[1], reverse=True)[:10]:
+        result["locations"].append({"location": l, "changes": c})
+
     return result
 
-def get_category_avg_rank(keyword):
-    ranks = []
-    for r in change_data:
-        if str(r.get('keyword','')).strip().lower() == keyword.lower():
-            try: ranks.append(int(r.get('new_rank',0)))
-            except: pass
-    return round(sum(ranks)/len(ranks),1) if ranks else 0
 
-def generate_alerts(category=None):
+# ============================================================================
+# ALERT GENERATOR WITH DEDUPLICATION (Improvement 3)
+# ============================================================================
+
+def _generate_raw_alerts(category=None, uploaded_reports=None):
+    if uploaded_reports is None:
+        uploaded_reports = []
+
+    readiness = calculate_readiness(uploaded_reports)
+    context = get_context_pronoun(len(uploaded_reports) > 0)
+
     alerts = []
     changes = parse_changes(category)
-    products = get_products(category)
-    for drop in changes.get('rank_drops', []):
+
+    for drop in changes.get("rank_drops", []):
         try:
-            old_r = int(drop.get('old_rank', 0))
-            new_r = int(drop.get('new_rank', 0))
+            old_r = int(drop.get("old_rank", 0))
+            new_r = int(drop.get("new_rank", 0))
             diff = new_r - old_r
+
             if diff >= 5:
-                keyword = drop.get('keyword','')
-                location = drop.get('location','Bangalore')
-                product = drop.get('product','')
-                cat_avg = get_category_avg_rank(keyword)
-                review_date = (datetime.now() + timedelta(days=3)).strftime('%B %d, %Y')
-                alerts.append({
-                    "id": f"alt_{abs(hash(product))%100000}",
-                    "platform": drop.get('platform','Blinkit'),
-                    "city": location,
-                    "sku": product,
-                    "category": keyword,
-                    "issue": "Critical Rank Drop" if diff >= 10 else "Rank Slipping",
-                    "leak_stage": "Visibility",
-                    "reason_bucket": "Competitor Issue" if diff >= 8 else "Visibility Issue",
-                    "priority": "High" if diff >= 10 else "Medium",
-                    "confidence": "High" if cat_avg > 0 else "Medium",
-                    "confirmed_evidence": f"Rank dropped from #{old_r} to #{new_r} ({diff} positions lost) in {location} for '{keyword}'.",
-                    "likely_cause": "Competitor visibility or offer pressure.",
-                    "missing_data_needed": ["Competitor pricing data", "Sales report to confirm revenue impact"],
-                    "compared_against": f"Category average rank is #{cat_avg}.",
-                    "what_to_check_first": [f"Compare your discount vs top 5 in '{keyword}'", f"Check stock in {location}", "Review ad visibility"],
-                    "recommended_action": f"Compare pricing for '{keyword}' in {location}. If discount is below average, consider a tactical offer.",
-                    "expected_impact": "Adjusting offer depth may recover rank in 3-5 days.",
-                    "review_date": review_date,
-                    "success_signal": f"Rank returns to top 5",
-                    "if_not_improved": "Increase ad visibility or launch bundle offer",
-                    "impact": "High" if diff >= 10 else "Medium",
-                    "detected_at": datetime.now().isoformat(),
-                    "status": "Pending"
-                })
-        except: pass
-    for d in changes.get('disappeared', [])[:3]:
-        product = d.get('product','')
-        keyword = d.get('keyword','')
-        location = d.get('location','Bangalore')
-        review_date = (datetime.now() + timedelta(days=2)).strftime('%B %d, %Y')
-        alerts.append({
-            "id": f"alt_{abs(hash(product))%100000}",
-            "platform": d.get('platform','Blinkit'),
-            "city": location,
-            "sku": product,
-            "category": keyword,
-            "issue": "Product Disappeared",
-            "leak_stage": "Visibility",
-            "reason_bucket": "Competitor Issue",
-            "priority": "High",
-            "confidence": "High",
-            "confirmed_evidence": f"'{product}' vanished from top 30 in {location}.",
-            "likely_cause": "Product may be out of stock, delisted, or pushed out by competitors.",
-            "missing_data_needed": ["Stock status", "Listing status on platform"],
-            "compared_against": f"Previous top 30 ranking for '{keyword}'.",
-            "what_to_check_first": ["Verify stock availability", "Check listing status", "Look for new competitor entries"],
-            "recommended_action": "Check stock and listing status urgently.",
-            "expected_impact": "Restoring visibility can recover ranking in 24-48 hours.",
-            "review_date": review_date,
-            "success_signal": "Product reappears in top 30",
-            "if_not_improved": "Investigate competitor entries and consider ad boost",
-            "impact": "High",
-            "detected_at": datetime.now().isoformat(),
-            "status": "Pending"
-        })
-    for entry in changes.get('new_entries', [])[:2]:
-        product = entry.get('product','')
-        keyword = entry.get('keyword','')
-        review_date = (datetime.now() + timedelta(days=3)).strftime('%B %d, %Y')
-        alerts.append({
-            "id": f"alt_{abs(hash(product))%100000}",
-            "platform": entry.get('platform','Blinkit'),
-            "city": entry.get('location','Bangalore'),
-            "sku": product,
-            "category": keyword,
-            "issue": "New Competitor Entry",
-            "leak_stage": "Competitor Pressure",
-            "reason_bucket": "Competitor Issue",
-            "priority": "Medium",
-            "confidence": "Medium",
-            "confirmed_evidence": f"'{product}' entered top 30 at #{entry.get('new_rank','?')} in '{keyword}'.",
-            "likely_cause": "New competitor launching in this category.",
-            "missing_data_needed": ["New entrant's pricing", "Their discount structure"],
-            "compared_against": "Existing top 30 competitors.",
-            "what_to_check_first": ["Track new entrant's price for 48 hours", "Monitor rank movement"],
-            "recommended_action": "Monitor for 48 hours. Prepare response if they gain traction.",
-            "expected_impact": "Early detection allows proactive response.",
-            "review_date": review_date,
-            "success_signal": "New entrant's rank stabilizes or declines",
-            "if_not_improved": "Consider defensive offer or ad increase",
-            "impact": "Medium",
-            "detected_at": datetime.now().isoformat(),
-            "status": "Pending"
-        })
+                keyword = drop.get("keyword", "")
+                location = drop.get("location", "Bangalore")
+                product = drop.get("product", "")
+                review_date = (datetime.now() + timedelta(days=3)).strftime(
+                    "%B %d, %Y"
+                )
+
+                alerts.append(
+                    {
+                        "id": f"alt_{abs(hash(product)) % 100000}",
+                        "platform": drop.get("platform", "Blinkit"),
+                        "city": location,
+                        "sku": product,
+                        "category": keyword,
+                        "issue": simplify_language(
+                            "Critical Rank Drop" if diff >= 10 else "Rank Slipping"
+                        ),
+                        "leak_stage": "Visibility",
+                        "reason_bucket": simplify_language("Competitor Issue"),
+                        "priority": "High" if diff >= 10 else "Medium",
+                        "confidence": readiness["confidence_level"],
+                        "confidence_score": readiness["confidence_score"],
+                        "confirmed_evidence": f"{format_rank_movement(old_r, new_r)} in {location} for '{keyword}'.",
+                        "likely_cause": f"{context['possessive']} competitor may have increased visibility or discounting.",
+                        "recommended_action": f"Compare {context['possessive'].lower()} pricing for '{keyword}' in {location}.",
+                        "review_date": review_date,
+                        "success_signal": f"{context['possessive']} rank returns to top 5",
+                        "impact": "High" if diff >= 10 else "Medium",
+                        "detected_at": datetime.now().isoformat(),
+                        "status": "Pending",
+                        "readiness_score": readiness["confidence_score"],
+                        "readiness_level": readiness["confidence_level"],
+                        "missing_data": readiness["missing_reports"][:3],
+                    }
+                )
+        except:
+            pass
+
+    return alerts
+
+
+def generate_alerts(category=None, uploaded_reports=None):
+    raw = _generate_raw_alerts(category, uploaded_reports)
+
+    # Deduplicate by product + city + category + issue
+    grouped = {}
+    for alert in raw:
+        key = f"{alert.get('sku','')}|{alert.get('city','')}|{alert.get('category','')}|{alert.get('issue','')}"
+        if key not in grouped:
+            grouped[key] = alert
+            grouped[key]["occurrences"] = 1
+        else:
+            grouped[key]["occurrences"] += 1
+
+    alerts = list(grouped.values())
+
+    # Sort by priority then occurrence count
+    priority_order = {"High": 0, "Medium": 1, "Low": 2}
+    alerts.sort(
+        key=lambda x: (
+            priority_order.get(x.get("priority", "Low"), 2),
+            -x.get("occurrences", 1),
+        )
+    )
+
     return alerts[:25]
 
+
+def get_alert_summary():
+    raw = _generate_raw_alerts()
+    actionable = generate_alerts()
+
+    return {
+        "raw_signals": len(raw),
+        "actionable_alerts": len(actionable),
+        "critical_active": len(
+            [a for a in actionable if a.get("priority") == "High"]
+        ),
+        "high_priority": len(
+            [a for a in actionable if a.get("priority") == "Medium"]
+        ),
+        "watchlist": len([a for a in actionable if a.get("priority") == "Low"]),
+    }
+
+
 # ============================================================================
-# REPORT TEMPLATES (v12.0)
+# DEMO REPORT (Improvement 10)
 # ============================================================================
 
-REPORT_TEMPLATES = {
-    "sales": {"required":["orders","revenue","date"],"optional":["product_name","brand","category","platform","city","quantity","avg_order_value","returns","cancellations"],"label":"Sales Report"},
-    "ads": {"required":["spend","impressions","clicks"],"optional":["ctr","cpc","cpa","roas","conversion_rate","campaign_name","keyword","audience","platform"],"label":"Ads / Marketing Report"},
-    "stock": {"required":["product_name","stock_quantity","date"],"optional":["warehouse","city","pincode","in_stock_pct","reorder_level","days_of_cover","listing_status"],"label":"Inventory / Stock Report"},
-    "funnel": {"required":["sessions","product_views","add_to_cart","checkout_initiated","orders"],"optional":["payment_attempted","payment_successful","bounce_rate","device","traffic_source","landing_page"],"label":"Funnel / Conversion Report"},
-    "payment": {"required":["payment_attempted","payment_successful","date"],"optional":["payment_failure_rate","upi_success","card_success","cod_usage","razorpay_drop","payment_method","gateway"],"label":"Payment / Gateway Report"},
-    "competitor_pricing": {"required":["competitor_name","product_name","competitor_price","date"],"optional":["our_price","competitor_discount","competitor_rank","platform","city"],"label":"Competitor Pricing Report"}
-}
+@app.get("/api/demo/report")
+async def demo_report():
+    return {
+        "category": "Bakery & Biscuits",
+        "location": "Bangalore",
+        "platform": "Blinkit",
+        "issue": "Significant rank decline detected",
+        "leak_stage": "Search visibility drop",
+        "reason_bucket": "Heavy competitor discounting",
+        "confidence": "High (85%)",
+        "confirmed_evidence": [
+            "Britannia Marie Gold dropped from #3 to #9 in HSR Layout — lost 6 positions",
+            "Competitor Sunfeast increased discount from 12% to 28% on same keyword",
+            "Search visibility declined 15% week-over-week",
+        ],
+        "likely_cause": "Sunfeast launched aggressive discounting on Blinkit Bangalore, capturing organic search visibility from Britannia.",
+        "what_to_check_first": [
+            "Compare your discount depth vs Sunfeast on 'biscuits' keyword",
+            "Check stock availability in HSR Layout darkstores",
+            "Review sponsored ad visibility for top 5 keywords",
+        ],
+        "recommended_action": "Do not match the discount. Launch a value combo (Marie Gold + Tea) at same price point to increase perceived value.",
+        "expected_impact": "If combo launched, can recover 40% of lost visibility within 7 days without eroding margins.",
+        "review_date": (datetime.now() + timedelta(days=3)).strftime("%B %d, %Y"),
+        "success_signal": "Rank returns to top 5 for 'biscuits' in HSR Layout",
+        "readiness_score": 85,
+        "missing_data": ["Ad spend report", "Margin sheet for Marie Gold"],
+        "auto_tasks": [
+            "Check Sunfeast current pricing on Blinkit",
+            "Verify Marie Gold stock in HSR Layout",
+            "Draft combo offer proposal",
+            "Review ad bids for 'biscuits' keyword",
+        ],
+    }
 
-def detect_report_type(columns):
-    columns_lower = [c.lower().strip() for c in columns]
-    scores = {}
-    for report_type, template in REPORT_TEMPLATES.items():
-        required = template["required"]
-        optional = template["optional"]
-        matched_required = [c for c in required if c in columns_lower]
-        matched_optional = [c for c in optional if c in columns_lower]
-        score = (len(matched_required)/len(required)*60) + (len(matched_optional)/len(optional)*40) if required else 0
-        scores[report_type] = {"label":template["label"],"score":round(score,1),"matched_required":matched_required,"matched_optional":matched_optional,"missing_required":[c for c in required if c not in columns_lower],"missing_optional":[c for c in optional if c not in columns_lower],"total_columns_expected":len(required)+len(optional),"total_columns_matched":len(matched_required)+len(matched_optional)}
-    best = max(scores.items(),key=lambda x:x[1]["score"]) if scores else (None,{"score":0})
-    return {"detected_type":best[0],"details":best[1],"all_scores":{k:v["score"] for k,v in scores.items()}}
 
 # ============================================================================
 # API ENDPOINTS
@@ -240,243 +636,219 @@ def detect_report_type(columns):
 
 @app.get("/api/health")
 async def health():
-    return {"status":"ok","version":"13.0","data_rows":len(main_data),"change_rows":len(change_data)}
+    return {
+        "status": "ok",
+        "version": "14.0",
+        "data_rows": len(main_data),
+        "change_rows": len(change_data),
+    }
+
 
 @app.get("/api/categories")
 async def categories():
-    return {"categories":sorted(set(str(r.get('category','')).strip() for r in main_data if str(r.get('category','')).strip()))}
+    return {
+        "categories": sorted(
+            set(
+                str(r.get("category", "")).strip()
+                for r in main_data
+                if str(r.get("category", "")).strip()
+            )
+        )
+    }
+
 
 @app.get("/api/dashboard")
 async def dashboard(category: Optional[str] = None):
-    return {"totalProducts":len(get_products(category)),"lastUpdated":str(last_refresh)}
+    return {
+        "totalProducts": len(get_products(category)),
+        "lastUpdated": str(last_refresh),
+        "alertSummary": get_alert_summary(),
+    }
+
 
 @app.get("/api/products")
 async def products(category: Optional[str] = None):
     prods = get_products(category)
-    return {"products":prods[:100],"count":len(prods)}
+    return {"products": prods[:100], "count": len(prods)}
+
 
 @app.get("/api/changes")
 async def changes(category: Optional[str] = None):
     return parse_changes(category)
 
+
 @app.get("/api/insights/ai")
 async def insights_ai(category: Optional[str] = None):
     c = parse_changes(category)
-    if c['total_changes']==0: return {"headline":"📭 No changes","summary":"No data.","key_metrics":{"total_changes":0,"critical_alerts":0,"top_location":"N/A","main_risk":"N/A"},"critical_issues":[],"actions":[]}
-    tl = c['locations'][0] if c['locations'] else {'location':'N/A','changes':0}
-    tk = c['keywords'][0] if c['keywords'] else {'keyword':'N/A','changes':0}
-    mc = c['change_types'][0] if c['change_types'] else {'type':'N/A','count':0}
-    return {"headline":f"📊 {c['total_changes']:,} changes","summary":f"{c['total_changes']:,} changes. {tl['location']} leads.","key_metrics":{"total_changes":c['total_changes'],"critical_alerts":c['severity']['Critical'],"top_location":tl['location'],"main_risk":mc['type']},"critical_issues":[f"{mc['type']}: {mc['count']}"],"actions":[{"priority":"High","action":f"Audit {tl['location']}"}]}
+
+    if c["total_changes"] == 0:
+        return {
+            "headline": "📭 No changes",
+            "summary": "No data.",
+            "key_metrics": {
+                "total_changes": 0,
+                "critical_alerts": 0,
+                "top_location": "N/A",
+                "main_risk": "N/A",
+            },
+            "critical_issues": [],
+            "actions": [],
+        }
+
+    tl = c["locations"][0] if c["locations"] else {"location": "N/A", "changes": 0}
+
+    return {
+        "headline": f"📊 {c['total_changes']:,} marketplace changes",
+        "summary": f"{c['total_changes']:,} changes. {tl['location']} leads.",
+        "key_metrics": {
+            "total_changes": c["total_changes"],
+            "critical_alerts": c["severity"]["Critical"],
+            "top_location": tl["location"],
+            "main_risk": c["change_types"][0]["type"] if c["change_types"] else "N/A",
+        },
+        "critical_issues": [
+            f"{c['change_types'][0]['type'] if c['change_types'] else 'N/A'}: {c['change_types'][0]['count'] if c['change_types'] else 0}"
+        ],
+        "actions": [{"priority": "High", "action": f"Audit {tl['location']}"}],
+    }
+
 
 @app.get("/api/top-brands")
-async def top_brands(limit:int=5, category: Optional[str] = None):
-    return {"brands":get_top_brands(limit, category)}
+async def top_brands(limit: int = 5, category: Optional[str] = None):
+    return {"brands": get_top_brands(limit, category)}
+
 
 @app.get("/api/alerts")
-async def alerts(category: Optional[str] = None):
-    a = generate_alerts(category)
-    return {"alerts":a,"count":len(a)}
+async def alerts(
+    category: Optional[str] = None,
+    uploaded: Optional[str] = Query(None),
+):
+    available = [r.strip() for r in uploaded.split(",")] if uploaded else []
+    a = generate_alerts(category, available)
+    readiness = calculate_readiness(available)
+    context = get_context_pronoun(len(available) > 0)
 
-@app.post("/api/alerts/{alert_id}/status")
-async def update_alert_status(alert_id: str, status: str = Query(..., pattern="^(Pending|In Progress|Done|Ignored)$")):
-    return {"alert_id":alert_id,"status":status,"updated":True}
+    return {
+        "alerts": a,
+        "count": len(a),
+        "summary": get_alert_summary(),
+        "readiness": readiness,
+        "context": context,
+    }
+
 
 @app.get("/api/actions/summary")
-async def action_summary(category: Optional[str] = None):
-    a = generate_alerts(category)
-    high = [x for x in a if x['priority']=='High']
-    return {"total_alerts":len(a),"high_priority":len(high),"alerts":a[:15]}
+async def action_summary(
+    category: Optional[str] = None,
+    uploaded: Optional[str] = Query(None),
+):
+    available = [r.strip() for r in uploaded.split(",")] if uploaded else []
+    a = generate_alerts(category, available)
+    high = [x for x in a if x["priority"] == "High"]
+    return {"total_alerts": len(a), "high_priority": len(high), "alerts": a[:15]}
+
 
 @app.get("/api/reports/generate")
 async def report():
-    output=io.StringIO(); w=csv.writer(output)
-    w.writerow(["Product","Brand","Price","Discount","Platform","City"])
-    for p in get_products()[:500]: w.writerow([p['name'],p['brand'],p['price'],p['discount'],p['platform'],p['city']])
+    output = io.StringIO()
+    w = csv.writer(output)
+    w.writerow(["Product", "Brand", "Price", "Discount", "Platform", "City"])
+    for p in get_products()[:500]:
+        w.writerow(
+            [p["name"], p["brand"], p["price"], p["discount"], p["platform"], p["city"]]
+        )
     output.seek(0)
-    return StreamingResponse(output,media_type="text/csv",headers={"Content-Disposition":"attachment; filename=report.csv"})
+    return StreamingResponse(
+        output,
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=numbrstalk_report.csv"},
+    )
 
-@app.get("/api/template/download")
-async def template():
-    output=io.StringIO(); w=csv.writer(output)
-    w.writerow(["impressions","clicks","product_views","add_to_cart","checkout_initiated","payment_success_rate","in_stock_pct","selling_price","discount","rating","cod_available","roas"])
-    w.writerow(["50000","5000","4500","200","80","65","85","500","10","4.2","yes","2.5"])
-    output.seek(0)
-    return StreamingResponse(output,media_type="text/csv",headers={"Content-Disposition":"attachment; filename=template.csv"})
 
-@app.post("/api/upload/map")
-async def upload_and_map(file: UploadFile = File(...)):
-    content = await file.read()
-    if file.filename.endswith('.csv'): df = pd.read_csv(io.BytesIO(content))
-    elif file.filename.endswith(('.xlsx','.xls')): df = pd.read_excel(io.BytesIO(content))
-    else: raise HTTPException(400, "Unsupported format.")
-    if df.empty: raise HTTPException(400, "File is empty.")
-    detection = detect_report_type(list(df.columns))
-    confidence_boost = 0
-    if detection["detected_type"]:
-        score = detection["details"]["score"]
-        if score >= 80: confidence_boost = 0.3
-        elif score >= 50: confidence_boost = 0.15
-        else: confidence_boost = 0.05
+@app.get("/api/confidence/upgrade")
+async def confidence_upgrade(uploaded: Optional[str] = Query(None)):
+    """
+    Returns confidence upgrade path for the Confidence Upgrade tab.
+    Pass comma-separated report types: ?uploaded=price_sheet,index_scrape
+    """
+    available = [r.strip() for r in uploaded.split(",")] if uploaded else []
+    readiness = calculate_readiness(available)
+    context = get_context_pronoun(len(available) > 0)
+
+    checklist = []
+    for report, weight in READINESS_WEIGHTS.items():
+        is_done = report in available
+        checklist.append(
+            {
+                "report": report.replace("_", " ").title(),
+                "weight": weight,
+                "done": is_done,
+                "label": f"{'✅' if is_done else '❌'} {report.replace('_', ' ').title()} ({'+' + str(weight) + '%' if is_done else '+' + str(weight) + '% potential'})",
+            }
+        )
+
     return {
-        "filename":file.filename,"rows":len(df),"columns_found":list(df.columns),
-        "report_detection":{"detected_type":detection["detected_type"],"label":detection["details"].get("label","Unknown"),"match_score":detection["details"].get("score",0),"matched_columns":detection["details"].get("total_columns_matched",0),"expected_columns":detection["details"].get("total_columns_expected",0)},
-        "mapping":{"matched_required":detection["details"].get("matched_required",[]),"matched_optional":detection["details"].get("matched_optional",[]),"missing_required":detection["details"].get("missing_required",[]),"missing_optional":detection["details"].get("missing_optional",[])},
-        "confidence_upgrade":f"+{int(confidence_boost*100)}%",
-        "next_steps":"Upload missing columns for more precise diagnosis." if detection["details"].get("missing_required") else "All required columns present."
+        "current_confidence": readiness["confidence_score"],
+        "confidence_level": readiness["confidence_level"],
+        "possessive": context["possessive"],
+        "brand_label": context["brand_label"],
+        "checklist": checklist,
+        "next_best_upload": readiness["next_best_upload"],
+        "next_best_label": readiness["next_best_upload"].replace("_", " ").title()
+        if readiness["next_best_upload"]
+        else "All reports uploaded",
+        "upload_remaining": len(readiness["missing_reports"]),
     }
 
-# ============================================================================
-# v13.0 — FULL DIAGNOSIS + MISSING DATA + CONFIDENCE UPGRADE + AUTO-TASKS + DEMO
-# ============================================================================
-
-@app.post("/api/diagnose/full")
-async def full_diagnosis(file: UploadFile = File(...)):
-    content = await file.read()
-    if file.filename.endswith('.csv'): df = pd.read_csv(io.BytesIO(content))
-    elif file.filename.endswith(('.xlsx','.xls')): df = pd.read_excel(io.BytesIO(content))
-    else: raise HTTPException(400, "Unsupported format.")
-    
-    columns = list(df.columns)
-    columns_lower = [c.lower().strip() for c in columns]
-    detection = detect_report_type(columns)
-    
-    has_sales = any(c in columns_lower for c in ["orders","revenue"])
-    has_funnel = any(c in columns_lower for c in ["add_to_cart","checkout_initiated"])
-    has_payment = any(c in columns_lower for c in ["payment_successful","payment_success_rate"])
-    has_ads = any(c in columns_lower for c in ["spend","roas","cpc"])
-    has_stock = any(c in columns_lower for c in ["stock_quantity","in_stock_pct"])
-    has_competitor = any(c in columns_lower for c in ["competitor_price","competitor_name"])
-    
-    diagnosis = {
-        "issue":"Performance Analysis","leak_stage":"Insufficient Data","reason_bucket":"Multiple Factors Possible",
-        "confidence":"Low","confirmed_evidence":[],"likely_cause":"","what_to_check_first":[],
-        "recommended_action":"","review_date":(datetime.now()+timedelta(days=3)).strftime("%B %d, %Y"),
-        "success_signal":"","missing_data_prompt":[],"auto_tasks":[],"confidence_upgrade_path":[]
-    }
-    
-    evidence = []
-    
-    if "payment_success_rate" in columns_lower:
-        ps = pd.to_numeric(df["payment_success_rate"], errors='coerce').mean()
-        evidence.append(f"Payment success rate: {ps:.0f}%")
-        if ps < 70:
-            diagnosis["leak_stage"] = "Payment"
-            diagnosis["reason_bucket"] = "Payment Gateway Issue"
-            diagnosis["issue"] = "Payment Leak Detected"
-            diagnosis["confirmed_evidence"].append(f"Payment success rate is {ps:.0f}% — below 70% threshold")
-            diagnosis["likely_cause"] = "UPI failure, Razorpay timeout, or COD unavailability"
-            diagnosis["what_to_check_first"] = ["Razorpay/UPI failure logs","COD availability by pincode","Payment gateway response time"]
-            diagnosis["recommended_action"] = "Fix payment gateway issues before increasing ad spend. Check UPI success rates and consider backup provider."
-            diagnosis["success_signal"] = "Payment success rate returns above 75%"
-            diagnosis["auto_tasks"] = ["Check Razorpay UPI failure logs","Verify COD availability for top 10 pincodes","Test payment gateway with test transaction","Review payment success rate after 48 hours"]
-    
-    if "add_to_cart" in columns_lower and "checkout_initiated" in columns_lower:
-        atc = pd.to_numeric(df["add_to_cart"], errors='coerce').sum()
-        ci = pd.to_numeric(df["checkout_initiated"], errors='coerce').sum()
-        if atc > 0:
-            rate = ci/atc
-            evidence.append(f"Cart-to-Checkout rate: {rate:.1%}")
-            if rate < 0.4:
-                diagnosis["leak_stage"] = "Cart-to-Checkout"
-                diagnosis["reason_bucket"] = "Cart Friction"
-                diagnosis["issue"] = "Checkout Drop-off"
-                diagnosis["confirmed_evidence"].append(f"Only {rate:.0%} of add-to-carts reach checkout")
-                diagnosis["likely_cause"] = "Delivery charge shock, forced login, or missing COD"
-                diagnosis["auto_tasks"].extend(["Check delivery charge impact on cart abandonment","Verify if COD is available for affected pincodes"])
-    
-    if "in_stock_pct" in columns_lower:
-        stock = pd.to_numeric(df["in_stock_pct"], errors='coerce').mean()
-        evidence.append(f"In-stock: {stock:.0f}%")
-        if stock < 70:
-            diagnosis["leak_stage"] = "Stock / Availability"
-            diagnosis["reason_bucket"] = "Stock Issue"
-            diagnosis["issue"] = "Stock Availability Risk"
-            diagnosis["auto_tasks"].append(f"Restock inventory — current level at {stock:.0f}%")
-    
-    if "roas" in columns_lower:
-        roas = pd.to_numeric(df["roas"], errors='coerce').mean()
-        evidence.append(f"ROAS: {roas:.1f}x")
-        if roas < 2: diagnosis["auto_tasks"].append("Pause low-ROAS keywords and review ad targeting")
-    
-    diagnosis["confirmed_evidence"] = evidence if evidence else ["Data uploaded but no critical signals detected yet."]
-    
-    missing = []
-    if not has_sales: missing.append("Sales Report (orders, revenue) — to confirm revenue impact")
-    if not has_funnel: missing.append("Funnel Report (add_to_cart, checkout_initiated) — to find conversion leaks")
-    if not has_payment: missing.append("Payment Report (payment_success_rate) — to check gateway health")
-    if not has_ads: missing.append("Ads Report (spend, roas) — to check marketing efficiency")
-    if not has_stock: missing.append("Stock Report (in_stock_pct) — to check availability")
-    if not has_competitor: missing.append("Competitor Pricing Report — to detect competitive pressure")
-    
-    if missing:
-        diagnosis["missing_data_prompt"] = missing
-        diagnosis["confidence"] = "Low" if len(missing) > 3 else "Medium"
-    else:
-        diagnosis["confidence"] = "High"
-        diagnosis["missing_data_prompt"] = ["All key data sources uploaded. Full diagnosis available."]
-    
-    diagnosis["confidence_upgrade_path"] = [
-        {"current":"Low","if_you_upload":"Sales Report","upgrades_to":"Medium","reason":"Revenue impact can be confirmed"},
-        {"current":"Medium","if_you_upload":"Funnel + Payment Report","upgrades_to":"High","reason":"Leak stage and reason can be precisely identified"}
-    ]
-    
-    if not diagnosis["auto_tasks"]:
-        diagnosis["auto_tasks"] = ["Upload sales data to confirm revenue impact","Upload funnel data to identify conversion leaks","Check competitor pricing in your category"]
-    
-    return {"filename":file.filename,"rows":len(df),"report_type":detection["detected_type"],"diagnosis":diagnosis}
-
-@app.get("/api/demo/diagnosis")
-async def demo_diagnosis():
-    return {
-        "issue":"Sales Drop","leak_stage":"Payment","reason_bucket":"Payment Gateway Issue","confidence":"High",
-        "confirmed_evidence":["Payment success rate dropped from 82% to 51% in last 7 days","Rank dropped from #3 to #9 in HSR Layout for 'biscuits'","Competitor discount increased from 5% to 18%"],
-        "likely_cause":"UPI/Razorpay failure spike combined with competitor offer pressure",
-        "what_to_check_first":["Razorpay UPI failure logs for last 48 hours","COD availability for top 5 pincodes","Competitor pricing gap vs your discount"],
-        "recommended_action":"Fix gateway issue before increasing ad spend. Check UPI success rates and consider backup provider.",
-        "review_date":(datetime.now()+timedelta(days=3)).strftime("%B %d, %Y"),
-        "success_signal":"Payment success rate returns above 75%",
-        "missing_data_prompt":["Sales Report — to confirm revenue impact","Ads Report — to check if paid visibility changed"],
-        "confidence_upgrade_path":[{"current":"Medium","if_you_upload":"Sales Report","upgrades_to":"High","reason":"Revenue impact can be precisely calculated"}],
-        "auto_tasks":["Check Razorpay UPI failure logs","Compare competitor discount gap","Verify stock in HSR Layout","Check delivery charge impact on cart abandonment","Review rank after 3 days"]
-    }
-
-@app.post("/api/diagnose/upload")
-async def diagnose_upload(file:UploadFile=File(...)):
-    content=await file.read()
-    df=pd.read_csv(io.BytesIO(content)) if file.filename.endswith('.csv') else pd.read_excel(io.BytesIO(content))
-    return {"filename":file.filename,"rows":len(df),"leak_stage":"Analysis pending"}
 
 @app.post("/api/chat")
 async def chat(request: ChatRequest):
     user_text = (request.message or request.question or "").strip().lower()
-    
+
     if not user_text:
-        return {"answer": "I'm Lilly! Ask me about marketplace performance, competitor activity, pricing trends, or stock issues."}
-    
+        return {
+            "answer": "I'm Lilly! Ask me about marketplace performance, competitor activity, or upload data for a full diagnosis."
+        }
+
     a = generate_alerts()
-    high = [x for x in a if x['priority']=='High']
-    
-    # Respond based on what the user asked
-    if any(word in user_text for word in ["margin", "leakage", "profit", "loss"]):
-        if high:
-            return {"answer": f"💰 Margin Analysis: {len(high)} high-risk items detected. Top concern: {high[0]['sku']} — {high[0]['confirmed_evidence']} Check the Action Desk for priority tasks."}
-        return {"answer": "💰 No critical margin leaks detected right now. Your pricing looks stable across monitored categories."}
-    
+    high = [x for x in a if x["priority"] == "High"]
+
     if any(word in user_text for word in ["discount", "price", "competitor", "snack"]):
-        top_discounts = get_top_brands(3)
-        brands_text = ", ".join([f"{b['brand']} ({b['avg_discount']}%)" for b in top_discounts if b['brand'] != 'No data'])
-        return {"answer": f"📊 Top discounting brands right now: {brands_text}. {len(high)} high-priority alerts need attention. Check the Alerts tab for competitor movements."}
-    
-    if any(word in user_text for word in ["stock", "inventory", "oos", "availability", "out of stock"]):
-        return {"answer": f"📦 Stock Alert: Monitoring inventory across {len(a)} tracked items. {len(high)} high-priority issues detected. Check the Alerts tab for stock-out warnings."}
-    
-    if any(word in user_text for word in ["breach", "script", "template", "alert", "report"]):
-        return {"answer": f"📋 Here's your alert template:\n\nSubject: Urgent Price Discrepancy Detected\nBody: Our monitoring detected {len(high)} high-priority issues. Top alert: {high[0]['sku']} — {high[0]['confirmed_evidence']}\nAction: {high[0]['recommended_action']}\nReview by: {high[0]['review_date']}\n\nCopy this and send to your category manager."}
-    
-    if any(word in user_text for word in ["rank", "visibility", "position"]):
-        return {"answer": f"📈 Visibility Report: {len(high)} high-priority rank drops detected. Most affected: {high[0]['sku']} in {high[0]['city']}. {high[0]['recommended_action']}"}
-    
-    # Default response
-    return {"answer": f"👋 I'm Lilly! I'm monitoring {len(a)} alerts across your categories. {len(high)} need immediate attention. Ask me about pricing, discounts, stock, or competitors — or check the Alerts tab for details."}
-if __name__=="__main__":
-    import uvicorn; uvicorn.run(app,host="0.0.0.0",port=8000)
+        top = get_top_brands(3)
+        brands = ", ".join(
+            [
+                f"{b['brand']} ({b['avg_discount']}%)"
+                for b in top
+                if b["brand"] != "No data"
+            ]
+        )
+        return {
+            "answer": f"📊 Top discounting brands: {brands}. {len(high)} high-priority alerts. Check the Alerts tab."
+        }
+
+    if any(word in user_text for word in ["margin", "leakage", "profit"]):
+        if high:
+            return {
+                "answer": f"💰 {len(high)} high-risk items. Top: {high[0]['sku']} — {high[0]['confirmed_evidence']}"
+            }
+        return {"answer": "💰 No critical margin leaks detected."}
+
+    if any(word in user_text for word in ["breach", "script", "template"]):
+        return {
+            "answer": f"📋 Alert template: {len(high)} high-priority issues. Top: {high[0]['sku']} — {high[0]['recommended_action']}"
+        }
+
+    if high:
+        return {
+            "answer": f"🚨 {len(high)} high-priority issues. Top: {high[0]['issue']} — {high[0]['confirmed_evidence']}"
+        }
+
+    return {
+        "answer": f"I'm Lilly! {len(a)} alerts across categories. No critical issues. Check the Alerts tab."
+    }
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=8000)
