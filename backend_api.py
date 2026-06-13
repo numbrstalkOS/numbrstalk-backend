@@ -801,50 +801,87 @@ async def confidence_upgrade(uploaded: Optional[str] = Query(None)):
     }
 
 
+INTENT_KEYWORDS = {
+    "biscuit": ["biscuit", "biscuits", "bakery", "cookie", "cookies", "rusk", "khari", "cream biscuits", "cracker", "bread", "cake", "toast"],
+    "biscuits": ["biscuit", "biscuits", "bakery", "cookie", "cookies", "rusk", "khari", "cream biscuits", "cracker", "bread", "cake", "toast"],
+    "bakery": ["biscuit", "biscuits", "bakery", "cookie", "cookies", "rusk", "khari", "cream biscuits", "cracker", "bread", "cake", "toast"],
+    "cookie": ["cookie", "cookies", "biscuit", "biscuits", "bakery", "cream biscuits"],
+    "cookies": ["cookie", "cookies", "biscuit", "biscuits", "bakery", "cream biscuits"],
+    "rusk": ["rusk", "bakery", "biscuit", "biscuits"],
+    "khari": ["khari", "bakery", "biscuit", "biscuits"],
+
+    "shampoo": ["shampoo", "anti dandruff shampoo", "hair care", "head & shoulders", "loreal"],
+    "agarbatti": ["agarbatti", "incense", "incense sticks", "spiritual needs"],
+    "cotton": ["cotton wicks", "diya batti", "spiritual needs"],
+    "wick": ["cotton wicks", "diya batti", "spiritual needs"],
+    "wicks": ["cotton wicks", "diya batti", "spiritual needs"],
+}
+
+
+def find_relevant_alerts(user_text: str, alerts: list) -> list:
+    text = user_text.lower()
+
+    search_terms = []
+
+    for trigger, terms in INTENT_KEYWORDS.items():
+        if trigger in text:
+            search_terms.extend(terms)
+
+    if not search_terms:
+        search_terms = [w for w in re.findall(r"[a-zA-Z0-9&]+", text) if len(w) >= 4]
+
+    matched = []
+
+    for alert in alerts:
+        searchable = " ".join([
+            str(alert.get("category", "")),
+            str(alert.get("sku", "")),
+            str(alert.get("confirmed_evidence", "")),
+            str(alert.get("issue", "")),
+            str(alert.get("likely_cause", "")),
+            str(alert.get("city", "")),
+            str(alert.get("platform", "")),
+        ]).lower()
+
+        if any(term.lower() in searchable for term in search_terms):
+            matched.append(alert)
+
+    return matched
+
+
 @app.post("/api/chat")
 async def chat(request: ChatRequest):
     user_text = (request.message or request.question or "").strip().lower()
 
     if not user_text:
         return {
-            "answer": "I'm Lilly! Ask me about marketplace performance, competitor activity, or upload data for a full diagnosis."
+            "answer": "I'm Lilly Commerce Assistant. Ask me about marketplace performance, competitor activity, rankings, pricing, stock, or upload data for a full diagnosis."
         }
 
-    a = generate_alerts()
-    high = [x for x in a if x["priority"] == "High"]
+    alerts = generate_alerts()
+    high = [x for x in alerts if x.get("priority") == "High"]
 
-    if any(word in user_text for word in ["discount", "price", "competitor", "snack"]):
-        top = get_top_brands(3)
-        brands = ", ".join(
-            [
-                f"{b['brand']} ({b['avg_discount']}%)"
-                for b in top
-                if b["brand"] != "No data"
-            ]
-        )
+    relevant_alerts = find_relevant_alerts(user_text, alerts)
+    relevant_high = [x for x in relevant_alerts if x.get("priority") == "High"]
+
+    selected_alerts = relevant_high or relevant_alerts or high or alerts
+
+    if selected_alerts:
+        top_alert = selected_alerts[0]
+
         return {
-            "answer": f"📊 Top discounting brands: {brands}. {len(high)} high-priority alerts. Check the Alerts tab."
-        }
-
-    if any(word in user_text for word in ["margin", "leakage", "profit"]):
-        if high:
-            return {
-                "answer": f"💰 {len(high)} high-risk items. Top: {high[0]['sku']} — {high[0]['confirmed_evidence']}"
-            }
-        return {"answer": "💰 No critical margin leaks detected."}
-
-    if any(word in user_text for word in ["breach", "script", "template"]):
-        return {
-            "answer": f"📋 Alert template: {len(high)} high-priority issues. Top: {high[0]['sku']} — {high[0]['recommended_action']}"
-        }
-
-    if high:
-        return {
-            "answer": f"🚨 {len(high)} high-priority issues. Top: {high[0]['issue']} — {high[0]['confirmed_evidence']}"
+            "answer": (
+                f"{top_alert.get('issue', 'Marketplace issue detected')}: "
+                f"{top_alert.get('confirmed_evidence', 'A ranking or visibility change was detected')} "
+                f"Likely cause: {top_alert.get('likely_cause', 'Competitor movement or marketplace visibility change')}. "
+                f"Recommended action: {top_alert.get('recommended_action', 'Review pricing, visibility, and stock for this location')}. "
+                f"Confidence: {top_alert.get('confidence_score', 0)}%. "
+                f"Location: {top_alert.get('city', 'Not specified')}."
+            )
         }
 
     return {
-        "answer": f"I'm Lilly! {len(a)} alerts across categories. No critical issues. Check the Alerts tab."
+        "answer": "I checked the current marketplace signals, but I could not find a matching alert for this question. Try asking by category, product, city, or keyword."
     }
 
 
