@@ -31,6 +31,7 @@ last_refresh = None
 class ChatRequest(BaseModel):
     question: str = ""
     message: str = ""
+    text: str = ""
     category: Optional[str] = None
     history: Optional[list] = None
 
