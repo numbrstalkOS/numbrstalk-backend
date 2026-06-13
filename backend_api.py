@@ -802,34 +802,153 @@ async def confidence_upgrade(uploaded: Optional[str] = Query(None)):
     }
 
 
-INTENT_KEYWORDS = {
-    "biscuit": ["biscuit", "biscuits", "bakery", "cookie", "cookies", "rusk", "khari", "cream biscuits", "cracker", "bread", "cake", "toast"],
-    "biscuits": ["biscuit", "biscuits", "bakery", "cookie", "cookies", "rusk", "khari", "cream biscuits", "cracker", "bread", "cake", "toast"],
-    "bakery": ["biscuit", "biscuits", "bakery", "cookie", "cookies", "rusk", "khari", "cream biscuits", "cracker", "bread", "cake", "toast"],
-    "cookie": ["cookie", "cookies", "biscuit", "biscuits", "bakery", "cream biscuits"],
-    "cookies": ["cookie", "cookies", "biscuit", "biscuits", "bakery", "cream biscuits"],
-    "rusk": ["rusk", "bakery", "biscuit", "biscuits"],
-    "khari": ["khari", "bakery", "biscuit", "biscuits"],
+KEYWORD_GROUPS = {
+    "biscuit": [
+        "biscuits", "biscuit", "cookies", "cookie", "rusk", "khari",
+        "tea biscuits", "cream biscuits", "milk rusk", "bread",
+        "whole wheat bread", "bakery snacks"
+    ],
+    "biscuits": [
+        "biscuits", "biscuit", "cookies", "cookie", "rusk", "khari",
+        "tea biscuits", "cream biscuits", "milk rusk", "bread",
+        "whole wheat bread", "bakery snacks"
+    ],
+    "bakery": [
+        "biscuits", "cookies", "rusk", "khari", "tea biscuits",
+        "cream biscuits", "milk rusk", "bread", "whole wheat bread",
+        "bakery snacks"
+    ],
+    "cookies": [
+        "cookies", "cookie", "biscuits", "biscuit", "cream biscuits", "bakery snacks"
+    ],
+    "rusk": [
+        "rusk", "milk rusk", "biscuits", "bakery snacks"
+    ],
+    "khari": [
+        "khari", "biscuits", "bakery snacks"
+    ],
 
-    "shampoo": ["shampoo", "anti dandruff shampoo", "hair care", "head & shoulders", "loreal"],
-    "agarbatti": ["agarbatti", "incense", "incense sticks", "spiritual needs"],
-    "cotton": ["cotton wicks", "diya batti", "spiritual needs"],
-    "wick": ["cotton wicks", "diya batti", "spiritual needs"],
-    "wicks": ["cotton wicks", "diya batti", "spiritual needs"],
+    "chips": [
+        "chips", "potato chips", "chips under 50", "nachos"
+    ],
+    "namkeen": [
+        "namkeen", "bhujia", "aloo bhujia", "mixture",
+        "mixture namkeen", "healthy namkeen"
+    ],
+    "bhujia": [
+        "bhujia", "aloo bhujia", "namkeen", "mixture namkeen"
+    ],
+
+    "juice": [
+        "juice", "fruit juice", "juice pack of 6", "coconut water",
+        "tender coconut water", "cold drink", "soft drink",
+        "energy drink", "energy drink can", "no sugar drink"
+    ],
+    "drink": [
+        "juice", "fruit juice", "coconut water", "tender coconut water",
+        "cold drink", "soft drink", "energy drink", "no sugar drink"
+    ],
+    "coconut": [
+        "coconut water", "tender coconut water"
+    ],
+
+    "agarbatti": [
+        "agarbatti", "incense sticks", "sandalwood agarbatti",
+        "pooja samagri", "diya", "brass diya", "cotton wicks",
+        "kapoor for pooja", "camphor", "pooja oil"
+    ],
+    "pooja": [
+        "pooja samagri", "kapoor for pooja", "camphor", "diya",
+        "brass diya", "cotton wicks", "agarbatti", "incense sticks",
+        "sandalwood agarbatti", "pooja oil"
+    ],
+    "diya": [
+        "diya", "brass diya", "cotton wicks", "pooja samagri"
+    ],
+    "camphor": [
+        "camphor", "kapoor for pooja", "pooja samagri"
+    ],
+
+    "beauty": [
+        "face wash", "face wash for men", "shampoo",
+        "anti dandruff shampoo", "sunscreen", "sunscreen spf 50",
+        "lipstick", "matte lipstick", "moisturizer", "body lotion"
+    ],
+    "shampoo": [
+        "shampoo", "anti dandruff shampoo"
+    ],
+    "face wash": [
+        "face wash", "face wash for men"
+    ],
+    "sunscreen": [
+        "sunscreen", "sunscreen spf 50"
+    ],
+    "lipstick": [
+        "lipstick", "matte lipstick"
+    ],
+    "moisturizer": [
+        "moisturizer", "body lotion"
+    ],
 }
+
+
+def get_tracked_keywords() -> list:
+    """Build unique tracked keywords from live data."""
+    keywords = set()
+
+    for row in main_data + change_data:
+        for field in ["keyword", "category"]:
+            value = str(row.get(field, "")).strip().lower()
+            if value and value not in ["nan", "none", "general", ""]:
+                keywords.add(value)
+
+    for group_terms in KEYWORD_GROUPS.values():
+        for term in group_terms:
+            keywords.add(term.lower())
+
+    return sorted(keywords, key=len, reverse=True)
+
+
+def term_in_text(term: str, text: str) -> bool:
+    """Match full keyword phrases safely."""
+    term = term.lower().strip()
+    text = text.lower().strip()
+
+    if not term:
+        return False
+
+    pattern = r"\b" + re.escape(term) + r"\b"
+    return re.search(pattern, text) is not None
 
 
 def find_relevant_alerts(user_text: str, alerts: list) -> list:
     text = user_text.lower()
+    search_terms = set()
 
-    search_terms = []
+    tracked_keywords = get_tracked_keywords()
 
-    for trigger, terms in INTENT_KEYWORDS.items():
-        if trigger in text:
-            search_terms.extend(terms)
+    # 1. Direct keyword match from live tracked keywords
+    for keyword in tracked_keywords:
+        if term_in_text(keyword, text):
+            search_terms.add(keyword)
 
+    # 2. Intent group expansion
+    for trigger, terms in KEYWORD_GROUPS.items():
+        if term_in_text(trigger, text):
+            for term in terms:
+                search_terms.add(term.lower())
+
+    # 3. Fallback to useful words from user question
     if not search_terms:
-        search_terms = [w for w in re.findall(r"[a-zA-Z0-9&]+", text) if len(w) >= 4]
+        fallback_words = [
+            w for w in re.findall(r"[a-zA-Z0-9&]+", text)
+            if len(w) >= 4 and w not in [
+                "what", "when", "where", "which", "show", "tell",
+                "about", "issue", "issues", "alert", "alerts",
+                "ranking", "rankings", "drop", "dropped", "down"
+            ]
+        ]
+        search_terms.update(fallback_words)
 
     matched = []
 
@@ -840,6 +959,7 @@ def find_relevant_alerts(user_text: str, alerts: list) -> list:
             str(alert.get("confirmed_evidence", "")),
             str(alert.get("issue", "")),
             str(alert.get("likely_cause", "")),
+            str(alert.get("recommended_action", "")),
             str(alert.get("city", "")),
             str(alert.get("platform", "")),
         ]).lower()
@@ -850,42 +970,76 @@ def find_relevant_alerts(user_text: str, alerts: list) -> list:
     return matched
 
 
+def clean_sentence(value: str, fallback: str) -> str:
+    text = str(value or fallback).strip()
+    return text.rstrip(".")
+
+
 @app.post("/api/chat")
 async def chat(request: ChatRequest):
-    user_text = (request.message or request.question or "").strip().lower()
+    user_text = (
+        request.message
+        or request.question
+        or getattr(request, "text", "")
+        or ""
+    ).strip().lower()
+
+    uploaded_reports = ["price_sheet", "index_scrape"]
 
     if not user_text:
         return {
-            "answer": "I'm Lilly Commerce Assistant. Ask me about marketplace performance, competitor activity, rankings, pricing, stock, or upload data for a full diagnosis."
+            "answer": (
+                "I'm Lilly Commerce Assistant. Ask me about marketplace performance, "
+                "competitor activity, rankings, pricing, stock, or upload data for a full diagnosis."
+            )
         }
 
-    alerts = generate_alerts()
+    alerts = generate_alerts(uploaded_reports=uploaded_reports)
     high = [x for x in alerts if x.get("priority") == "High"]
 
     relevant_alerts = find_relevant_alerts(user_text, alerts)
     relevant_high = [x for x in relevant_alerts if x.get("priority") == "High"]
 
-    selected_alerts = relevant_high or relevant_alerts or high or alerts
+    selected_alerts = relevant_high or relevant_alerts
 
-    if selected_alerts:
-        top_alert = selected_alerts[0]
+    is_general_alert_query = any(
+        word in user_text
+        for word in ["alert", "alerts", "issue", "issues", "problem", "problems", "diagnosis", "summary"]
+    )
 
+    if not selected_alerts and is_general_alert_query:
+        selected_alerts = high or alerts
+
+    if not selected_alerts:
         return {
             "answer": (
-                f"{top_alert.get('issue', 'Marketplace issue detected')}: "
-                f"{top_alert.get('confirmed_evidence', 'A ranking or visibility change was detected')} "
-                f"Likely cause: {top_alert.get('likely_cause', 'Competitor movement or marketplace visibility change')}. "
-                f"Recommended action: {top_alert.get('recommended_action', 'Review pricing, visibility, and stock for this location')}. "
-                f"Confidence: {top_alert.get('confidence_score', 0)}%. "
-                f"Location: {top_alert.get('city', 'Not specified')}."
+                "I checked the current marketplace signals, but I could not find an active alert "
+                "for that keyword right now. Try asking by product, category, city, or keyword."
             )
         }
 
+    top_alert = selected_alerts[0]
+
+    likely_cause = clean_sentence(
+        top_alert.get("likely_cause"),
+        "Competitor movement or marketplace visibility change"
+    )
+
+    recommended_action = clean_sentence(
+        top_alert.get("recommended_action"),
+        "Review pricing, visibility, and stock for this location"
+    )
+
     return {
-        "answer": "I checked the current marketplace signals, but I could not find a matching alert for this question. Try asking by category, product, city, or keyword."
+        "answer": (
+            f"{top_alert.get('issue', 'Marketplace issue detected')}: "
+            f"{top_alert.get('confirmed_evidence', 'A ranking or visibility change was detected')} "
+            f"Likely cause: {likely_cause}. "
+            f"Recommended action: {recommended_action}. "
+            f"Confidence: {top_alert.get('confidence_score', 0)}%. "
+            f"Location: {top_alert.get('city', 'Not specified')}."
+        )
     }
-
-
 if __name__ == "__main__":
     import uvicorn
 
